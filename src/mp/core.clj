@@ -818,6 +818,46 @@ Returns a new priority map with supplied mappings"
         locs (vec (map vec locs))
         locs-to-id (into {} (map vector locs (range)))
         [[xmin xmax] [ymin ymax]] (bounding-box locs)
+        front-node-priority (fn [p-1 p p+1]
+                              (if-not p nil
+                                      (let [[[x-1 y-1] [x y] [x+1 y+1]] (map locs [p-1 p p+1])
+                                            prty (apply min (keep identity [(when (and p-1 p+1 (> x-1 x) (> x+1 x)) (+ x (- y+1 y-1)))
+                                                                            (when (and p-1 p+1 (= x-1 x x+1)) (+ xmax 10))
+                                                                            (when (and p+1 (> x+1 x)) (+ x (* 2 (- y+1 ymin))))
+                                                                            (when (and p-1 (> x-1 x)) (+ x (* 2 (- ymax y-1))))
+                                                                            (+ xmax 10)]))]
+                                        prty)))
+        points-on-either-side (fn [front p n]
+                                (let [[x0 y0] (locs p)
+                                      before-p (take n (map second (rsubseq front < y0)))
+                                      after-p (take n (map second (subseq front > y0)))]
+                                  (concat (reverse before-p) [p] after-p)))
+        update-priorities (fn [pf affected-nodes]
+                            (let [affected-triplets (partition 3 1 affected-nodes)]
+                              (reduce (fn [cpf [p-1 p p+1]]
+                                        (assoc cpf p (front-node-priority p-1 p p+1))) pf affected-triplets)))
+        add-node (fn add-node [w [cx cy :as np]]
+                   (let [new-node-id (locs-to-id np)]
+                     (thrush-with-pattern [{:keys [front pfront graph-edges] :as w}] w
+                       (if-let [p (front cy)]
+                         (let [[p-2 p-1 p p+1 p+2] (points-on-either-side front p 2)]
+                           (thrush-with-pattern [w]
+                             (update-in w [:graph-edges] #(into % [[p new-node-id] [p-1 new-node-id] [p+1 new-node-id]]))
+                             (assoc w [:front cy] new-node-id)
+                             (update-in w [:pfront] #(update-priorities % [p-2 p-1 new-node-id p+1 p+2]))))
+                         (thrush-with-pattern [w]
+                           (assoc-in w [:front cy] new-node-id)
+                           (let [[p-2 p-1 p p+1 p+2] (points-on-either-side new-node-id)]
+                             (update-in w [:pfront] #(update-priorities % [p-2 p-1 new-node-id p+1 p+2]))))))
+                     (loop [{ge :graph-edges f :front pf :pfront} w]
+                       (let [[cid s-max] (peek pf)]
+                         (if (< cx s-max) w
+                             (let [[p-2 p-1 p p+1 p+2] (points-on-either-side cid 2)
+                                   [x y] (locs cid)
+                                   new-f (dissoc f y)
+                                   new-pf (-> (dissoc pf p) (update-priorities [p-2 p-1 p+1 p+2]))
+                                   new-ge (conj ge [p-1 p+1])]
+                               (recur {:front new-f :pfront new-pf :graph-edges new-ge})))))))
         add-node (fn add-node [w [cx cy :as np]]
                    {:pre [#_(clojure.inspector/inspect-tree w)]}
                    (let [new-node-id (locs-to-id np)]
