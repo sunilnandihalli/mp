@@ -858,61 +858,6 @@ Returns a new priority map with supplied mappings"
                                    new-pf (-> (dissoc pf p) (update-priorities [p-2 p-1 p+1 p+2]))
                                    new-ge (conj ge [p-1 p+1])]
                                (recur {:front new-f :pfront new-pf :graph-edges new-ge})))))))
-        add-node (fn add-node [w [cx cy :as np]]
-                   {:pre [#_(clojure.inspector/inspect-tree w)]}
-                   (let [new-node-id (locs-to-id np)]
-                     (thrush-with-pattern [{:keys [front pfront graph-edges] :as w}]
-                       (loop [{ge :graph-edges f :front pf :pfront} w]
-                         (let [[cid s-max] (peek pf)]
-                           (if-not (>= cx s-max) w
-                                   (let [[x0 y0] (locs cid)
-                                         [p-1 p-2] (map second (rsubseq f < y0))
-                                         [p+1 p+2] (map second (subseq f > y0))
-                                         [[x-2 y-2] [x-1 y-1] [x+1 y+1] [x+2 y+2]] (map #(when % (locs %)) [p-2 p-1 p+1 p+2])
-                                         new-f (dissoc f y0)
-                                         new-pf (thrush-with-pattern [x]
-                                                  (pop pf)
-                                                  (if-not p-1 x
-                                                          (assoc x p-1 (cond
-                                                                        (and p-2 p+1) (+ x-1 (- y+1 y-2))
-                                                                        p+1 (+ (* 2 (- y+1 ymin)) x-1)
-                                                                        p-2 (+ (* 2 (- ymax y-2)) x-1)
-                                                                        :else xmax)))
-                                                  (if-not p+1 x
-                                                          (assoc x p+1 (cond
-                                                                        (and p-1 p+2) (+ x+1 (- y+2 y-1))
-                                                                        p-1 (+ (* 2 (- ymax y-1)) x+1)
-                                                                        p+2 (+ (* 2 (- y+2 ymin)) x+1)
-                                                                        :else xmax))))
-                                         new-ge (if (and p-1 p+1) (conj ge [p-1 p+1]) ge)]
-                                     (recur {:graph-edges new-ge :front new-f :pfront new-pf})))))
-                       (let [[new-pf new-ge] (if-let [old-same-y-node-id (front cy)]
-                                               [(dissoc pfront old-same-y-node-id)
-                                                (conj graph-edges [old-same-y-node-id new-node-id])]
-                                               [pfront graph-edges])]
-                         {:graph-edges new-ge :front front :pfront new-pf})
-                       (let [new-f (assoc front cy new-node-id)
-                             [p-1 p-2] (map second (rsubseq new-f < cy))
-                             [p+1 p+2] (map second (subseq new-f > cy))
-                             [[x-2 y-2] [x-1 y-1] [x+1 y+1] [x+2 y+2]] (map #(when % (locs %)) [p-2 p-1 p+1 p+2])
-                             new-pf (thrush-with-pattern [x]
-                                      (assoc pfront new-node-id (cond
-                                                                 (and p-1 p+1) (+ cx (- y+1 y-1))
-                                                                 p+1 (+ (* 2 (- y+1 ymin)) cx)
-                                                                 p-1 (+ (* 2 (- ymax y-1)) cx)
-                                                                 :else xmax))
-                                      (if-not p+1 x
-                                              (assoc x p+1 (cond
-                                                            p+2 (+ cx (- y+2 y-1))
-                                                            :else (+ (* 2 (- ymax cy)) cx))))
-                                      (if-not p-1 x
-                                              (assoc x p-1 (cond
-                                                            p-2 (+ cx (- ymax y-2))
-                                                            :else (+ (* 2 (- cy ymin)) cx)))))
-                             new-ge (thrush-with-pattern [x]
-                                      (if p+1 (conj graph-edges [new-node-id p+1]) graph-edges)
-                                      (if p-1 (conj x [new-node-id p-1]) x))]
-                         {:graph-edges new-ge :front new-f :pfront new-pf}))))
         [[_ fy :as floc] & rlocs] (sort locs)
         fid (locs-to-id floc)
         {vornoi-graph-edges :graph-edges} (reduce #(do (clojure.inspector/inspect-tree {:cur %1 :new-node %2 :locs locs :locs-to-id locs-to-id})
