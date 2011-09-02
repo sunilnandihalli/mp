@@ -2,12 +2,7 @@
   (:refer-clojure)
   (:gen-class)
   (:require [mp.debug :as d])
-  (:import clojure.lang.MapEntry java.util.Map clojure.lang.PersistentTreeMap
-           (clojure.lang Seqable Sequential ISeq IPersistentSet ILookup
-                         IPersistentStack IPersistentCollection Associative
-                         Sorted Reversible Indexed Counted)))
-
-
+  (:import clojure.lang.MapEntry java.util.Map clojure.lang.PersistentTreeMap))
 
 
 (declare pm-empty)
