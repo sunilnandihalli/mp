@@ -1,4 +1,4 @@
-(ns bitvector.debug
+(ns mp.debug
   (:require [clojure.contrib.macro-utils :as m]
 	    [clojure.pprint :as p]
 	    [clojure.walk :as w]

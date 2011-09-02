@@ -1,6 +1,7 @@
 (ns mp.core
   (:refer-clojure)
   (:gen-class)
+  (:require [mp.debug :as d])
   (:import clojure.lang.MapEntry java.util.Map clojure.lang.PersistentTreeMap
            (clojure.lang Seqable Sequential ISeq IPersistentSet ILookup
                          IPersistentStack IPersistentCollection Associative
@@ -593,6 +594,8 @@
     (toArray [_] nil) ; TBD
     (toArray [_ a] nil)) ; TBD
 
+
+
 (let [measure-lr (fn [x] (Len-Right-Meter. 1 x))
       zero-lr (Len-Right-Meter. 0 nil)
       len-lr (meter measure-lr
@@ -630,6 +633,7 @@
   DeepTree    (print-tree [x] (p "DeepTree" (.pre x) (.mid x) (.suf x)))
   SingleTree  (print-tree [x] (p "SingleTree" (.x x)))
   Object      (print-tree [x] (pr x)))
+
 
 
 (declare pm-empty)
@@ -793,17 +797,106 @@ Returns a new priority map with supplied mappings"
         [[n] & nodes] (->> (map #(re-seq #"[^ ]+" %) vs)
                            (map #(map read-string %)))]
     [n (into [] (take n nodes))]))
-  
 
+(defn bounding-box [locs]
+  (map #(apply (juxt min max) %) [(map first locs) (map second locs)]))
+
+(defn int-str [i]
+  (cond
+   (< i 10) (str i " ")
+   (< i 100) (str i)))
+
+(defn display [locs-to-id locs]
+  (let [[[xmin xmax] [ymin ymax]] (bounding-box locs)
+        str (reduce (fn [cstr x]
+                      (str cstr (apply str (interpose " " (map #(if-let [i (locs-to-id [x %])] (int-str i) ". ")
+                                                               (range ymin (inc ymax))))) "\n")) "" (range xmin (inc xmax)))]
+    (println str)))
+    
 (defn solve []
   (let [[n locs] (read-stdin)
+        locs (vec (map vec locs))
         locs-to-id (into {} (map vector locs (range)))
-        add-node (fn add-node [{:keys [graph-edges front pfront] :as w} [x y :as loc]]
-                   (let [{:keys [graph-edges front pfront]} (loop [{ge :graph-edges f :front pf :pfront} w]
-                                                              (let [[f-id prty] (peek pf)]))]))                                                                
-        {vornoi-graph :graph-edges} (reduce add-node {:front (sorted-set-by (comp second locs)) :pfront (priority-map) :graph-edges {}} (sort locs))]
-        ))
+        [[xmin xmax] [ymin ymax]] (bounding-box locs)
+        add-node (fn add-node [w [cx cy :as np]]
+                   {:pre [#_(clojure.inspector/inspect-tree w)]}
+                   (let [new-node-id (locs-to-id np)]
+                     (thrush-with-pattern [{:keys [front pfront graph-edges] :as w}]
+                       (loop [{ge :graph-edges f :front pf :pfront} w]
+                         (let [[cid s-max] (peek pf)]
+                           (if-not (>= cx s-max) w
+                                   (let [[x0 y0] (locs cid)
+                                         [p-1 p-2] (map second (rsubseq f < y0))
+                                         [p+1 p+2] (map second (subseq f > y0))
+                                         [[x-2 y-2] [x-1 y-1] [x+1 y+1] [x+2 y+2]] (map #(when % (locs %)) [p-2 p-1 p+1 p+2])
+                                         new-f (dissoc f y0)
+                                         new-pf (thrush-with-pattern [x]
+                                                  (pop pf)
+                                                  (if-not p-1 x
+                                                          (assoc x p-1 (cond
+                                                                        (and p-2 p+1) (+ x-1 (- y+1 y-2))
+                                                                        p+1 (+ (* 2 (- y+1 ymin)) x-1)
+                                                                        p-2 (+ (* 2 (- ymax y-2)) x-1)
+                                                                        :else xmax)))
+                                                  (if-not p+1 x
+                                                          (assoc x p+1 (cond
+                                                                        (and p-1 p+2) (+ x+1 (- y+2 y-1))
+                                                                        p-1 (+ (* 2 (- ymax y-1)) x+1)
+                                                                        p+2 (+ (* 2 (- y+2 ymin)) x+1)
+                                                                        :else xmax))))
+                                         new-ge (if (and p-1 p+1) (conj ge [p-1 p+1]) ge)]
+                                     (recur {:graph-edges new-ge :front new-f :pfront new-pf})))))
+                       (let [[new-pf new-ge] (if-let [old-same-y-node-id (front cy)]
+                                               [(dissoc pfront old-same-y-node-id)
+                                                (conj graph-edges [old-same-y-node-id new-node-id])]
+                                               [pfront graph-edges])]
+                         {:graph-edges new-ge :front front :pfront new-pf})
+                       (let [new-f (assoc front cy new-node-id)
+                             [p-1 p-2] (map second (rsubseq new-f < cy))
+                             [p+1 p+2] (map second (subseq new-f > cy))
+                             [[x-2 y-2] [x-1 y-1] [x+1 y+1] [x+2 y+2]] (map #(when % (locs %)) [p-2 p-1 p+1 p+2])
+                             new-pf (thrush-with-pattern [x]
+                                      (assoc pfront new-node-id (cond
+                                                                 (and p-1 p+1) (+ cx (- y+1 y-1))
+                                                                 p+1 (+ (* 2 (- y+1 ymin)) cx)
+                                                                 p-1 (+ (* 2 (- ymax y-1)) cx)
+                                                                 :else xmax))
+                                      (if-not p+1 x
+                                              (assoc x p+1 (cond
+                                                            p+2 (+ cx (- y+2 y-1))
+                                                            :else (+ (* 2 (- ymax cy)) cx))))
+                                      (if-not p-1 x
+                                              (assoc x p-1 (cond
+                                                            p-2 (+ cx (- ymax y-2))
+                                                            :else (+ (* 2 (- cy ymin)) cx)))))
+                             new-ge (thrush-with-pattern [x]
+                                      (if p+1 (conj graph-edges [new-node-id p+1]) graph-edges)
+                                      (if p-1 (conj x [new-node-id p-1]) x))]
+                         {:graph-edges new-ge :front new-f :pfront new-pf}))))
+        [[_ fy :as floc] & rlocs] (sort locs)
+        fid (locs-to-id floc)
+        {vornoi-graph-edges :graph-edges} (reduce #(do (clojure.inspector/inspect-tree {:cur %1 :new-node %2 :locs locs :locs-to-id locs-to-id})
+                                                       (add-node %1 %2)) {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :graph-edges []} rlocs)
+        vornoi-graph  (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
+                                (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges)
+        vornoi-graph-edges (into #{} (map set vornoi-graph-edges))
+        abs (fn [a] (if (< a 0) (- a) a))
+        cost (memoize (fn [i]
+                        (if-not (integer? i) (do (clojure.inspector/inspect-tree (d/self-keyed-map i))
+                                                 (throw (Exception. "errror")))
+                                (let [[x0 y0] (locs i)]
+                                  (reduce + (map (fn [[x y]] (max (abs (- x x0)) (abs (- y y0)))) locs))))))
+        _ (clojure.inspector/inspect-tree (d/self-keyed-map vornoi-graph vornoi-graph-edges))
+        min-node-id (loop [cur-i 0]
+                      (let [cur-cost (cost cur-i)]
+                        (println (d/self-keyed-map cur-i cur-cost)))
+                      (let [nbrs (vornoi-graph cur-i)
+                            min-nbr (apply min-key cost nbrs)]
+                        (if (< (cost min-nbr) (cost cur-i))
+                          (recur min-nbr) cur-i)))
+        brute-force-min-id (apply min-key cost (range (count locs)))]
+    (display locs-to-id locs)
+    (println {min-node-id (cost min-node-id)
+              brute-force-min-id (cost brute-force-min-id)})))
 
 (defn -main [])
-        
-    
