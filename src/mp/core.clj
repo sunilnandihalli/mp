@@ -240,23 +240,49 @@ Returns a new priority map with supplied mappings"
                      w))
         [[_ fy :as floc] & rlocs] (sort locs)
         fid (locs-to-id floc)
-        {vornoi-graph-edges :graph-edges} (reduce add-node {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :graph-edges []} rlocs)
+        {vornoi-graph-edges :graph-edges} (reduce add-node {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :boundary-nodes #{fid} :graph-edges []} rlocs)
         vornoi-graph  (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
                                 (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges)
+        boundary-nodes (loop [[fbf & rbf] [fid] bnodes #{fid}]
+                         (if-not fbf bnodes
+                                 (let [nbrs-set (set (vornoi-graph fbf))
+                                       new-bnodes (filter (comp not bnodes) (filter #(= 1 (count (filter nbrs-set (vornoi-graph %)))) nbrs-set))]
+                                   (recur (into rbf new-bnodes) (into bnodes new-bnodes)))))
         vornoi-graph-edges (into #{} (map set vornoi-graph-edges))
         abs (fn [a] (if (< a 0) (- a) a))
+        dist (fn [[x1 y1] [x2 y2]]
+               (max (abs (- x1 x2)) (abs (- y1 y2))))
         cost (memoize (fn [i]
                         (let [[x0 y0] (locs i)]
                           (reduce + (map (fn [[x y]] (max (abs (- x x0)) (abs (- y y0)))) locs)))))
+        dist-from-bndry (into {} (map vector boundary-nodes (repeat 0)))
+        initial-guess (loop [front (into (priority-map) dist-from-bndry) cur-dist-from-bndry dist-from-bndry]
+                        (if (empty? front) cur-dist-from-bndry
+                            (let [[cnode cdist] (peek front)
+                                  cnode-nbrs-not-assigned (filter (comp not cur-dist-from-bndry) (vornoi-graph cnode))
+                                  new-nodes-with-dist (let [ndist (inc cdist)] (map #(do [% ndist]) cnode-nbrs-not-assigned))
+                                  new-front (into (pop front) new-nodes-with-dist)
+                                  new-cur-dist-from-bndry (into dist-from-bndry new-nodes-with-dist)]
+                              (recur new-front new-cur-dist-from-bndry))))
+        weiszfeld-update (fn [[x y]]
+                           (let [sum-weights sum-weight-loc-product]
+                             (reduce (fn [[s-w [s-w-x s-w-y]] [xi yi]]
+                                       (let [w (/ 1.0 (max (abs (- x xi)) (abs (- y yi))))]
+                                         [(+ s-w w) [(+ s-w-x (* w xi)) (+ s-w-y (* w yi))]])) [0 0] locs)))
+        is-optimum-node (fn [i]
+                          (let [nbrs (vornoi-graph i)
+                                min-nbr (apply min-key cost nbrs)]
+                            (< (cost min-nbr) (cost cur-i))))
+        find-vornoi-cell (fn [starting-cell-id [x y]]
+                           (loop [c-cell-id starting-cell-id]
+                             (let [mdist #(dist [x y] (locs %))
+                                   min-neighbouring-cell-id (apply min-key mdist (vornoi-graph c-cell-id))]
+                               (if (< (mdist min-neighbouring-cell-id) (mdist c-cell-id))
+                                 (recur min-neighbouring-cell-id) c-cell-id))))
         min-node-id (loop [cur-i 0]
-                      (let [cur-cost (cost cur-i)]
-                        (println (d/self-keyed-map cur-i cur-cost)))
-                      (let [nbrs (vornoi-graph cur-i)
-                            min-nbr (apply min-key cost nbrs)]
-                        (if (< (cost min-nbr) (cost cur-i))
-                          (recur min-nbr) cur-i)))
-        brute-force-min-id (apply min-key cost (range (count locs)))]
-    (println {:vornoi {:min-id min-node-id :cost (cost min-node-id)}
-              :brute {:min-id brute-force-min-id :cost (cost brute-force-min-id)}})))
+                      (if (is-optimum-node cur-i) cur-i
+                          (recur min-nbr))) 
+  min-cost (cost min-node-id)]
+    (println min-cost)))
 
 (defn -main [])
