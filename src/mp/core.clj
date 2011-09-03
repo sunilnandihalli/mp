@@ -187,7 +187,15 @@ Returns a new priority map with supplied mappings"
                       (str cstr (apply str (interpose " " (map #(if-let [i (locs-to-id [x %])] (int-str i) ". ")
                                                                (range ymin (inc ymax))))) "\n")) "" (range xmin (inc xmax)))]
     (println str)))
-    
+
+(defn abs [a] (if (< a 0) (- a) a))
+
+(defn brute-force-solve [locs]
+  (let [mcost (fn [[x y]]
+                (reduce (fn [cst [xi yi]]
+                            (+ cst (max (abs (- x xi)) (abs (- y yi))))) 0 locs))]
+    (apply min (map mcost locs))))
+
 (defn solve []
   (let [[n locs] (read-stdin)
         locs (vec (map vec locs))
@@ -243,46 +251,45 @@ Returns a new priority map with supplied mappings"
         {vornoi-graph-edges :graph-edges} (reduce add-node {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :boundary-nodes #{fid} :graph-edges []} rlocs)
         vornoi-graph  (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
                                 (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges)
-        boundary-nodes (loop [[fbf & rbf] [fid] bnodes #{fid}]
-                         (if-not fbf bnodes
-                                 (let [nbrs-set (set (vornoi-graph fbf))
-                                       new-bnodes (filter (comp not bnodes) (filter #(= 1 (count (filter nbrs-set (vornoi-graph %)))) nbrs-set))]
-                                   (recur (into rbf new-bnodes) (into bnodes new-bnodes)))))
         vornoi-graph-edges (into #{} (map set vornoi-graph-edges))
-        abs (fn [a] (if (< a 0) (- a) a))
+        
         dist (fn [[x1 y1] [x2 y2]]
                (max (abs (- x1 x2)) (abs (- y1 y2))))
         cost (memoize (fn [i]
                         (let [[x0 y0] (locs i)]
                           (reduce + (map (fn [[x y]] (max (abs (- x x0)) (abs (- y y0)))) locs)))))
-        dist-from-bndry (into {} (map vector boundary-nodes (repeat 0)))
-        initial-guess (loop [front (into (priority-map) dist-from-bndry) cur-dist-from-bndry dist-from-bndry]
-                        (if (empty? front) cur-dist-from-bndry
-                            (let [[cnode cdist] (peek front)
-                                  cnode-nbrs-not-assigned (filter (comp not cur-dist-from-bndry) (vornoi-graph cnode))
-                                  new-nodes-with-dist (let [ndist (inc cdist)] (map #(do [% ndist]) cnode-nbrs-not-assigned))
-                                  new-front (into (pop front) new-nodes-with-dist)
-                                  new-cur-dist-from-bndry (into dist-from-bndry new-nodes-with-dist)]
-                              (recur new-front new-cur-dist-from-bndry))))
-        weiszfeld-update (fn [[x y]]
-                           (let [sum-weights sum-weight-loc-product]
-                             (reduce (fn [[s-w [s-w-x s-w-y]] [xi yi]]
-                                       (let [w (/ 1.0 (max (abs (- x xi)) (abs (- y yi))))]
-                                         [(+ s-w w) [(+ s-w-x (* w xi)) (+ s-w-y (* w yi))]])) [0 0] locs)))
-        is-optimum-node (fn [i]
-                          (let [nbrs (vornoi-graph i)
-                                min-nbr (apply min-key cost nbrs)]
-                            (< (cost min-nbr) (cost cur-i))))
+        
         find-vornoi-cell (fn [starting-cell-id [x y]]
                            (loop [c-cell-id starting-cell-id]
                              (let [mdist #(dist [x y] (locs %))
                                    min-neighbouring-cell-id (apply min-key mdist (vornoi-graph c-cell-id))]
                                (if (< (mdist min-neighbouring-cell-id) (mdist c-cell-id))
                                  (recur min-neighbouring-cell-id) c-cell-id))))
-        min-node-id (loop [cur-i 0]
-                      (if (is-optimum-node cur-i) cur-i
-                          (recur min-nbr))) 
-  min-cost (cost min-node-id)]
+
+        weiszfeld-update (fn [[i [x y]]]
+                           (let [[s-w [s-w-x s-w-y]] (reduce (fn [[s-w [s-w-x s-w-y]] [xi yi]]
+                                                               (let [d (dist [x y] [xi yi])
+                                                                     w (if (< (abs d) 1e-3) 0 (/ 1.0 d))]
+                                                                 [(+ s-w w) [(+ s-w-x (* w xi)) (+ s-w-y (* w yi))]])) [0 [0 0]] locs)
+                                 [x-new y-new] [(/ s-w-x s-w) (/ s-w-y s-w)]
+                                 i-new (find-vornoi-cell i [x-new y-new])]
+                             [i-new [x-new y-new]]))
+        next-optimum-node (fn [i]
+                            (let [nbrs (vornoi-graph i)
+                                  min-nbr (apply min-key cost nbrs)]
+                              (when (> (cost i) (cost min-nbr)) min-nbr)))
+        min-node-id (loop [[cur-i _ :as w] (weiszfeld-update [0 (locs 0)])]
+                      (let [[updated-i :as next-w] (weiszfeld-update w)
+                            new-i (next-optimum-node updated-i)]
+                        (if new-i
+                          (if (= new-i cur-i) (loop [cci cur-i]
+                                                (if-let [new-cci (next-optimum-node cci)]
+                                                  (recur new-cci) cci))
+                              (recur [new-i (locs new-i)]))
+                          updated-i)))
+        min-cost (cost min-node-id)]
     (println min-cost)))
 
-(defn -main [])
+
+(defn -main []
+  (solve))
