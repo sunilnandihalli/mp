@@ -241,17 +241,13 @@ Returns a new priority map with supplied mappings"
         [[_ fy :as floc] & rlocs] (sort locs)
         fid (locs-to-id floc)
         {vornoi-graph-edges :graph-edges} (reduce add-node {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :graph-edges []} rlocs)
-        _ (clojure.inspector/inspect-tree (d/self-keyed-map vornoi-graph-edges))
-
         vornoi-graph  (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
                                 (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges)
         vornoi-graph-edges (into #{} (map set vornoi-graph-edges))
         abs (fn [a] (if (< a 0) (- a) a))
         cost (memoize (fn [i]
-                        (if-not (integer? i) (do (clojure.inspector/inspect-tree (d/self-keyed-map i))
-                                                 (throw (Exception. "errror")))
-                                (let [[x0 y0] (locs i)]
-                                  (reduce + (map (fn [[x y]] (max (abs (- x x0)) (abs (- y y0)))) locs))))))
+                        (let [[x0 y0] (locs i)]
+                          (reduce + (map (fn [[x y]] (max (abs (- x x0)) (abs (- y y0)))) locs)))))
         min-node-id (loop [cur-i 0]
                       (let [cur-cost (cost cur-i)]
                         (println (d/self-keyed-map cur-i cur-cost)))
