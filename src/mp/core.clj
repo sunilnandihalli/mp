@@ -1,7 +1,6 @@
 (ns mp.core
   (:refer-clojure)
   (:gen-class)
-  (:require [mp.debug :as d])
   (:import clojure.lang.MapEntry java.util.Map clojure.lang.PersistentTreeMap))
 
 
@@ -215,49 +214,53 @@ Returns a new priority map with supplied mappings"
                                       before-p (take n (concat (map second (rsubseq front < y0)) (repeat nil)))
                                       after-p (take n (concat (map second (subseq front > y0)) (repeat nil)))]
                                   (concat (reverse before-p) [p] after-p)))
+        two-points-on-either-side (fn [front p]
+                                    (let [[x0 y0] (locs p)
+                                          [p-1 p-2] (map second (rsubseq front < y0))
+                                          [p+1 p+2] (map second (subseq front > y0))]
+                                      [p-2 p-1 p p+1 p+2]))
         update-priorities (fn [pf affected-nodes]
                             (let [affected-triplets (partition 3 1 affected-nodes)]
                               (reduce (fn [cpf [p-1 p p+1]]
                                         (if p (assoc cpf p (front-node-priority p-1 p p+1)) cpf)) pf affected-triplets)))
         add-node (fn add-node [w [cx cy :as np]]
-                   {:post [#_(do (println (str "--------------------------adding " (locs-to-id np) " done--------------------------------")) true)]
-                    :pre [#_(clojure.inspector/inspect-tree w)
-                          #_(do (println (str "adding .." (locs-to-id np))) true)]}
                    (let [new-node-id (locs-to-id np)
                          w (if-let [p (get-in w [:front cy])]
-                             (let [[p-2 p-1 p p+1 p+2] (points-on-either-side (:front w) p 2)
+                             (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side (:front w) p)
                                    w (update-in w [:graph-edges] #(into % (filter first [[p new-node-id] [p-1 new-node-id] [p+1 new-node-id]])))
                                    w (assoc-in w [:front cy] new-node-id)
                                    w (update-in w [:pfront] #(dissoc % p))
                                    w (update-in w [:pfront] #(update-priorities % [p-2 p-1 new-node-id p+1 p+2]))]
                                w)
                              (let [w (assoc-in w [:front cy] new-node-id)
-                                   [p-2 p-1 p p+1 p+2 ] (points-on-either-side (:front w) new-node-id 2)
+                                   [p-2 p-1 p p+1 p+2 ] (two-points-on-either-side (:front w) new-node-id)
                                    w (update-in w [:graph-edges] #(into % (filter first [[p-1 new-node-id] [p+1 new-node-id]])))
                                    w (update-in w [:pfront] #(update-priorities % [p-2 p-1 new-node-id p+1 p+2]))]
                                w))
                          w (loop [{ge :graph-edges f :front pf :pfront :as w} w]
                              (let [[cid s-max] (peek pf)]
                                (if (< cx s-max) w
-                                   (let [[p-2 p-1 p p+1 p+2] (points-on-either-side f cid 2)
+                                   (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side f cid)
                                          [x y] (locs cid)
                                          new-f (dissoc f y)
                                          new-pf (-> (dissoc pf p) (update-priorities [p-2 p-1 p+1 p+2]))
                                          new-ge (if (and p-1 p+1) (conj ge [p-1 p+1]) ge)]
                                      (recur {:front new-f :pfront new-pf :graph-edges new-ge})))))]
                      w))
-        [[_ fy :as floc] & rlocs] (sort locs)
+        [[_ fy :as floc] & rlocs] (time (sort locs))
         fid (locs-to-id floc)
-        {vornoi-graph-edges :graph-edges} (reduce add-node {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :boundary-nodes #{fid} :graph-edges []} rlocs)
-        vornoi-graph  (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
-                                (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges)
-        vornoi-graph-edges (into #{} (map set vornoi-graph-edges))
+        {vornoi-graph-edges :graph-edges} (time (reduce add-node {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :boundary-nodes #{fid} :graph-edges []} rlocs))
+        vornoi-graph  (time (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
+                                      (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges))
         
         dist (fn [[x1 y1] [x2 y2]]
                (max (abs (- x1 x2)) (abs (- y1 y2))))
-        cost (memoize (fn [i]
-                        (let [[x0 y0] (locs i)]
-                          (reduce + (map (fn [[x y]] (max (abs (- x x0)) (abs (- y y0)))) locs)))))
+        cost (memoize (let [count (atom 0)]
+                        (fn [i]
+                          (swap! count inc)
+                          (println (str "count called .." @count))
+                          (let [[x0 y0] (locs i)]
+                            (reduce + (map (fn [[x y]] (max (abs (- x x0)) (abs (- y y0)))) locs))))))
         
         find-vornoi-cell (fn [starting-cell-id [x y]]
                            (loop [c-cell-id starting-cell-id]
