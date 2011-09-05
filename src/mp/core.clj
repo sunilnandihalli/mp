@@ -1,6 +1,7 @@
 (ns mp.core
   (:refer-clojure)
   (:gen-class)
+  (:require [mp.debug :as d])
   (:import clojure.lang.MapEntry java.util.Map clojure.lang.PersistentTreeMap))
 
 
@@ -196,103 +197,35 @@ Returns a new priority map with supplied mappings"
     (apply min (map mcost locs))))
 
 (defn solve []
-  (let [[n locs] (read-stdin)
-        locs (vec (map vec locs))
-        locs-to-id (into {} (map vector locs (range)))
-        [[xmin xmax] [ymin ymax]] (bounding-box locs)
-        front-node-priority (fn [p-1 p p+1]
-                              (if-not p nil
-                                      (let [[[x-1 y-1] [x y] [x+1 y+1]] (map #(when % (locs %)) [p-1 p p+1])
-                                            prty (apply min (keep identity [(when (and p-1 p+1 (> x-1 x) (> x+1 x)) (+ x (- y+1 y-1)))
-                                                                            (when (and p-1 p+1 (= x-1 x x+1)) (inc xmax))
-                                                                            (when (and p+1 (> x+1 x)) (+ x (* 2 (- y+1 ymin))))
-                                                                            (when (and p-1 (> x-1 x)) (+ x (* 2 (- ymax y-1))))
-                                                                            (inc xmax)]))]
-                                        prty)))
-        points-on-either-side (fn [front p n]
-                                (let [[x0 y0] (locs p)
-                                      before-p (take n (concat (map second (rsubseq front < y0)) (repeat nil)))
-                                      after-p (take n (concat (map second (subseq front > y0)) (repeat nil)))]
-                                  (concat (reverse before-p) [p] after-p)))
-        two-points-on-either-side (fn [front p]
-                                    (let [[x0 y0] (locs p)
-                                          [p-1 p-2] (map second (rsubseq front < y0))
-                                          [p+1 p+2] (map second (subseq front > y0))]
-                                      [p-2 p-1 p p+1 p+2]))
-        update-priorities (fn [pf affected-nodes]
-                            (let [affected-triplets (partition 3 1 affected-nodes)]
-                              (reduce (fn [cpf [p-1 p p+1]]
-                                        (if p (assoc cpf p (front-node-priority p-1 p p+1)) cpf)) pf affected-triplets)))
-        add-node (fn add-node [w [cx cy :as np]]
-                   (let [new-node-id (locs-to-id np)
-                         w (if-let [p (get-in w [:front cy])]
-                             (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side (:front w) p)
-                                   w (update-in w [:graph-edges] #(into % (filter first [[p new-node-id] [p-1 new-node-id] [p+1 new-node-id]])))
-                                   w (assoc-in w [:front cy] new-node-id)
-                                   w (update-in w [:pfront] #(dissoc % p))
-                                   w (update-in w [:pfront] #(update-priorities % [p-2 p-1 new-node-id p+1 p+2]))]
-                               w)
-                             (let [w (assoc-in w [:front cy] new-node-id)
-                                   [p-2 p-1 p p+1 p+2 ] (two-points-on-either-side (:front w) new-node-id)
-                                   w (update-in w [:graph-edges] #(into % (filter first [[p-1 new-node-id] [p+1 new-node-id]])))
-                                   w (update-in w [:pfront] #(update-priorities % [p-2 p-1 new-node-id p+1 p+2]))]
-                               w))
-                         w (loop [{ge :graph-edges f :front pf :pfront :as w} w]
-                             (let [[cid s-max] (peek pf)]
-                               (if (< cx s-max) w
-                                   (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side f cid)
-                                         [x y] (locs cid)
-                                         new-f (dissoc f y)
-                                         new-pf (-> (dissoc pf p) (update-priorities [p-2 p-1 p+1 p+2]))
-                                         new-ge (if (and p-1 p+1) (conj ge [p-1 p+1]) ge)]
-                                     (recur {:front new-f :pfront new-pf :graph-edges new-ge})))))]
-                     w))
-        [[_ fy :as floc] & rlocs] (time (sort locs))
-        fid (locs-to-id floc)
-        {vornoi-graph-edges :graph-edges} (time (reduce add-node {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :boundary-nodes #{fid} :graph-edges []} rlocs))
-        vornoi-graph  (time (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
-                                      (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges))
+  (let [[n locs] (time (read-stdin))
+        [xsum ysum] (reduce (fn [[xsum ysum] [x y]]
+                              [(+ xsum x) (+ ysum y)]) locs)
+        [xav yav] [(/ xsum n) (/ ysum n)]
+        [k-x+y k-x-y] [(+ xav yav) (- xav yav)]
+        [dx+ dx- dy+ dy- x+y-coll x-y-coll _] (map persistent!
+                                                   (take 6 (reduce (fn [[dx+ dx- dy+ dy- x+y-coll x-y-coll cid] [x y]]
+                                                                     (let [x+y (+ x y)
+                                                                           x-y (- x y)
+                                                                           ncid (inc cid)]
+                                                                       (if (< x+y k-x+y)
+                                                                         (if (< x-y k-x-y)
+                                                                           [dx+ dx- dy+ (conj! dy- cid) (conj! x+y-coll x+y) (conj! x-y-coll x-y) ncid] 
+                                                                           [dx+ (conj! dx- cid) dy+ dy- (conj! x+y-coll x+y) (conj! x-y-coll x-y) ncid])
+                                                                         (if (< x-y k-x-y)
+                                                                           [dx+ dx- (conj! dy+ cid) dy- (conj! x+y-coll x+y) (conj! x-y-coll x-y) ncid] 
+                                                                           [(conj! dx+ cid) dx- dy+ dy- (conj! x+y-coll x+y) (conj! x-y-coll x-y) ncid]))))
+                                                                   [(transient (vector-of :int)) (transient (vector-of :int)) (transient (vector-of :int))
+                                                                    (transient (vector-of :int)) (transient (vector-of :int)) (transient (vector-of :int))] locs)))
+        dx+-x+y (into (sorted-set-by #(< (x+y-coll %1) (x+y-coll %2))) dx+)
+        dx+-x-y (into (sorted-set-by #(< (x-y-coll %1) (x-y-coll %2))) dx+)
+        dx--x+y (into (sorted-set-by #(> (x+y-coll %1) (x+y-coll %2))) dx-)
+        dx--x-y (into (sorted-set-by #(> (x-y-coll %1) (x-y-coll %2))) dx-)
+        dy+-x+y (into (sorted-set-by #(< (x+y-coll %1) (x+y-coll %2))) dy+)
+        dy+-x-y (into (sorted-set-by #(> (x-y-coll %1) (x-y-coll %2))) dy+)
+        dy--x+y (into (sorted-set-by #(> (x+y-coll %1) (x+y-coll %2))) dy-)
+        dy--x-y (into (sorted-set-by #(< (x-y-coll %1) (x+y-coll %2))) dy-)
         
-        dist (fn [[x1 y1] [x2 y2]]
-               (max (abs (- x1 x2)) (abs (- y1 y2))))
-        cost (memoize (let [count (atom 0)]
-                        (fn [i]
-                          (swap! count inc)
-                          (println (str "count called .." @count))
-                          (let [[x0 y0] (locs i)]
-                            (reduce + (map (fn [[x y]] (max (abs (- x x0)) (abs (- y y0)))) locs))))))
-        
-        find-vornoi-cell (fn [starting-cell-id [x y]]
-                           (loop [c-cell-id starting-cell-id]
-                             (let [mdist #(dist [x y] (locs %))
-                                   min-neighbouring-cell-id (apply min-key mdist (vornoi-graph c-cell-id))]
-                               (if (< (mdist min-neighbouring-cell-id) (mdist c-cell-id))
-                                 (recur min-neighbouring-cell-id) c-cell-id))))
-
-        weiszfeld-update (fn [[i [x y]]]
-                           (let [[s-w [s-w-x s-w-y]] (reduce (fn [[s-w [s-w-x s-w-y]] [xi yi]]
-                                                               (let [d (dist [x y] [xi yi])
-                                                                     w (if (< (abs d) 1e-3) 0 (/ 1.0 d))]
-                                                                 [(+ s-w w) [(+ s-w-x (* w xi)) (+ s-w-y (* w yi))]])) [0 [0 0]] locs)
-                                 [x-new y-new] [(/ s-w-x s-w) (/ s-w-y s-w)]
-                                 i-new (find-vornoi-cell i [x-new y-new])]
-                             [i-new [x-new y-new]]))
-        next-optimum-node (fn [i]
-                            (let [nbrs (vornoi-graph i)
-                                  min-nbr (apply min-key cost nbrs)]
-                              (when (> (cost i) (cost min-nbr)) min-nbr)))
-        min-node-id (loop [[cur-i _ :as w] (weiszfeld-update [0 (locs 0)])]
-                      (let [[updated-i :as next-w] (weiszfeld-update w)
-                            new-i (next-optimum-node updated-i)]
-                        (if new-i
-                          (if (= new-i cur-i) (loop [cci cur-i]
-                                                (if-let [new-cci (next-optimum-node cci)]
-                                                  (recur new-cci) cci))
-                              (recur [new-i (locs new-i)]))
-                          updated-i)))
-        min-cost (cost min-node-id)]
-    (println min-cost)))
-
+             
 
 (defn -main []
   (solve))
