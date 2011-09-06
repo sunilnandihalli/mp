@@ -198,32 +198,106 @@ Returns a new priority map with supplied mappings"
 
 (defn solve []
   (let [[n locs] (time (read-stdin))
+        locs (vec (map vec locs))
         [xsum ysum] (reduce (fn [[xsum ysum] [x y]]
                               [(+ xsum x) (+ ysum y)]) locs)
         [xav yav] [(/ xsum n) (/ ysum n)]
         [k-x+y k-x-y] [(+ xav yav) (- xav yav)]
-        [dx+ dx- dy+ dy- x+y-coll x-y-coll _] (map persistent!
-                                                   (take 6 (reduce (fn [[dx+ dx- dy+ dy- x+y-coll x-y-coll cid] [x y]]
-                                                                     (let [x+y (+ x y)
-                                                                           x-y (- x y)
-                                                                           ncid (inc cid)]
-                                                                       (if (< x+y k-x+y)
-                                                                         (if (< x-y k-x-y)
-                                                                           [dx+ dx- dy+ (conj! dy- cid) (conj! x+y-coll x+y) (conj! x-y-coll x-y) ncid] 
-                                                                           [dx+ (conj! dx- cid) dy+ dy- (conj! x+y-coll x+y) (conj! x-y-coll x-y) ncid])
-                                                                         (if (< x-y k-x-y)
-                                                                           [dx+ dx- (conj! dy+ cid) dy- (conj! x+y-coll x+y) (conj! x-y-coll x-y) ncid] 
-                                                                           [(conj! dx+ cid) dx- dy+ dy- (conj! x+y-coll x+y) (conj! x-y-coll x-y) ncid]))))
-                                                                   [(transient (vector-of :int)) (transient (vector-of :int)) (transient (vector-of :int))
-                                                                    (transient (vector-of :int)) (transient (vector-of :int)) (transient (vector-of :int))] locs)))
-        dx+-x+y (into (sorted-set-by #(< (x+y-coll %1) (x+y-coll %2))) dx+)
-        dx+-x-y (into (sorted-set-by #(< (x-y-coll %1) (x-y-coll %2))) dx+)
-        dx--x+y (into (sorted-set-by #(> (x+y-coll %1) (x+y-coll %2))) dx-)
-        dx--x-y (into (sorted-set-by #(> (x-y-coll %1) (x-y-coll %2))) dx-)
-        dy+-x+y (into (sorted-set-by #(< (x+y-coll %1) (x+y-coll %2))) dy+)
-        dy+-x-y (into (sorted-set-by #(> (x-y-coll %1) (x-y-coll %2))) dy+)
-        dy--x+y (into (sorted-set-by #(> (x+y-coll %1) (x+y-coll %2))) dy-)
-        dy--x-y (into (sorted-set-by #(< (x-y-coll %1) (x+y-coll %2))) dy-)
+        [dx+ dx- dy+ dy- x+y-coll x-y-coll] (reduce (fn [[dx+ dx- dy+ dy- x+y-coll x-y-coll cid] [x y]]
+                                                      (let [x+y (+ x y)
+                                                            x-y (- x y)
+                                                            ncid (inc cid)]
+                                                        (if (< x+y k-x+y)
+                                                          (if (< x-y k-x-y)
+                                                            [dx+ dx- dy+ (conj dy- cid) (conj x+y-coll x+y) (conj x-y-coll x-y) ncid] 
+                                                            [dx+ (conj dx- cid) dy+ dy- (conj x+y-coll x+y) (conj x-y-coll x-y) ncid])
+                                                          (if (< x-y k-x-y)
+                                                            [dx+ dx- (conj dy+ cid) dy- (conj x+y-coll x+y) (conj x-y-coll x-y) ncid] 
+                                                            [(conj dx+ cid) dx- dy+ dy- (conj x+y-coll x+y) (conj x-y-coll x-y) ncid]))))
+                                                    [(vector-of :int) (vector-of :int) (vector-of :int)
+                                                     (vector-of :int) (vector-of :int) (vector-of :int) 0] locs)
+        [sum-dx+ sum-dx-] (map #(reduce (fn [s i]
+                                          (let [[x _] (locs i)]
+                                            (+ s x))) %) [dx+ dx-])
+        [sum-dy+ sum-dy-] (map #(reduce (fn [s i]
+                                          (let [[_ y] (locs i)]
+                                            (+ s y))) %) [dy+ dy-])
+        f-x+y-< #(< (x+y-coll %1) (x+y-coll %2))
+        f-x-y-< #(< (x-y-coll %1) (x-y-coll %2))
+        f-x+y-> #(> (x+y-coll %1) (x+y-coll %2))
+        f-x-y-> #(> (x-y-coll %1) (x-y-coll %2))
+        dx+-x+y (into (priority-map-by f-x+y-<) dx+)
+        dx+-x-y (into (priority-map-by f-x-y-<) dx+)
+        dx--x+y (into (priority-map-by f-x+y->) dx-)
+        dx--x-y (into (priority-map-by f-x-y->) dx-)
+        dy+-x+y (into (priority-map-by f-x+y-<) dy+)
+        dy+-x-y (into (priority-map-by f-x-y->) dy+)
+        dy--x+y (into (priority-map-by f-x+y->) dy-)
+        dy--x-y (into (priority-map-by f-x-y-<) dy-)
+        
+        cost (fn cost [mp]
+               (- (+ (get-in mp [:dx :+ :sum])
+                     (get-in mp [:dy :+ :sum]))
+                  (+ (get-in mp [:dx :- :sum])
+                     (get-in mp [:dy :- :sum]))))
+
+     
+        hash-coll {:x+y x+y-coll :x-y x-y-coll}
+        node-movement-map {:x+y {:dec [{:from [:dy :-] :to [:dx :+]}
+                                       {:from [:dx :-] :to [:dy :+]}]
+                                 :inc [{:from [:dx :+] :to [:dy :-]}
+                                       {:from [:dy :+] :to [:dx :-]}]}
+                           :x-y {:dec [{:from [:dy :+] :to [:dx :+]}
+                                       {:from [:dx :-] :to [:dy :-]}]
+                                 :inc [{:from [:dx :+] :to [:dy :+]}
+                                       {:from [:dy :-] :to [:dx :-]}]}}
+        move (fn move [[dir inc-or-dec] mp]
+               {:post [(clojure.inspector/inspect-tree {:before (d/self-keyed-map dir inc-or-dec mp locs)
+                                                        :after %})]}
+               (let [[opt1 opt2 :as opts] (get-in node-movement-map [dir inc-or-dec])
+                     [s1 s2] (map #(get-in mp (:from %)) opts)
+                     [h1 h2] (map #((hash-coll dir) (first (% dir))) [s1 s2])
+                     execute-option (fn execute-option [{:keys [from to] :as opt}]
+                                      (let [mdisj (fn mdisj [dx-or-dy id m]
+                                                    (-> m
+                                                        (update-in [:x+y] #(disj % id))
+                                                        (update-in [:x-y] #(disj % id))
+                                                        (update-in [:sum] #(case dx-or-dy
+                                                                                 :dx (let [[x _] (locs id)] (- % x))
+                                                                                 :dy (let [[_ y] (locs id)] (- % y))))))
+                                            mconj (fn mconj [dx-or-dy id m]
+                                                    (-> m
+                                                        (update-in [:x+y] #(conj % id))
+                                                        (update-in [:x-y] #(conj % id))
+                                                        (update-in [:sum] #(case dx-or-dy
+                                                                                 :dx (let [[x _] (locs id)] (+ % x))
+                                                                                 :dy (let [[_ y] (locs id)] (+ % y))))))
+                                            id (first (get-in mp (conj from dir)))]
+                                        (-> mp
+                                            (update-in from #(mdisj (first from) id %))
+                                            (update-in to #(mconj (first to) id %)))))]
+                 (execute-option (if ((case inc-or-dec :inc < :dec >) h1 h2) opt1 opt2))))
+        optimize-along-dir (fn optimize [optimization-dir mp]
+                             (let [helper (fn helper [hmp inc-or-dec]
+                                            (let [nhmp (move [optimization-dir inc-or-dec] hmp)
+                                                  cst-nhmp (cost nhmp)
+                                                  cst-hmp (cost hmp)]
+                                              (if (> cst-nhmp cst-hmp) hmp
+                                                  (recur nhmp inc-or-dec))))
+                                   mp-inc (helper mp :inc)
+                                   cst-mp (cost mp)
+                                   cst-mp-inc (cost mp-inc)]
+                               (if (= cst-mp-inc cst-mp)
+                                 (helper cst-mp :dec) mp-inc)))
+        mp {:dx {:+ {:x+y dx+-x+y :x-y dx+-x-y :sum sum-dx+}
+                 :- {:x+y dx--x+y :x-y dx--x-y :sum sum-dx-}}
+            :dy {:+ {:x+y dy+-x+y :x-y dy+-x-y :sum sum-dy+}
+                 :- {:x+y dy--x-y :x-y dy--x-y :sum sum-dy-}}}
+        min-mp (loop [cur-mp mp]
+                 (let [new-mp (->> mp (optimize-along-dir :x+y) (optimize-along-dir :x-y))]
+                   (if (= new-mp mp) mp (recur new-mp))))]
+    (println (cost min-mp))))
+                
         
              
 
