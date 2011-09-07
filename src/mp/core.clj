@@ -232,6 +232,7 @@ Returns a new priority map with supplied mappings"
         dy--x-y (into (priority-map-by <) (map (juxt identity x-y-coll) dy-))
         
         cost-fn (fn cost-fn [mp]
+                  {:pre [#_(do (clojure.pprint/pprint mp) true)]}
                   (let [k (- (+ (get-in mp [:dx :+ :sum])
                                 (get-in mp [:dy :+ :sum]))
                              (+ (get-in mp [:dx :- :sum])
@@ -268,7 +269,8 @@ Returns a new priority map with supplied mappings"
                                  :inc [{:from [:dx :+] :to [:dy :+]}
                                        {:from [:dy :-] :to [:dx :-]}]}}
         move (fn move [[dir inc-or-dec] mp]
-               {:post [#_(clojure.inspector/inspect-tree {:before (d/self-keyed-map dir inc-or-dec mp locs) :after %})]}
+               {:post [#_(clojure.inspector/inspect-tree {:before (d/self-keyed-map dir inc-or-dec mp locs) :after %})
+                       #_(or (clojure.pprint/pprint {:before (d/self-keyed-map dir inc-or-dec mp locs) :after %}) true)]}
                (let [execute-option (fn execute-option [cmp  [id {:keys [from to] :as opt}]]
                                       (let [mdisj (fn mdisj [dx-or-dy m]
                                                     (-> m
@@ -290,6 +292,7 @@ Returns a new priority map with supplied mappings"
                      [opt1 opt2 :as opts] (get-in node-movement-map [dir inc-or-dec])
                      inc-or-dec-fn ({:inc < :dec >} inc-or-dec)]
                  (loop [ccmp mp old-hash-val nil]
+                   ;(clojure.pprint/pprint (d/self-keyed-map ccmp old-hash-val opts inc-or-dec dir))
                    (let [[s1 s2] (map #(get-in ccmp (:from %)) opts)
                          [[id1 h1 :as fs1] [id2 h2 :as fs2]] (map (comp peek dir) [s1 s2])]
                      (if-let [[[id h] copt] (cond
@@ -297,27 +300,34 @@ Returns a new priority map with supplied mappings"
                                              fs1 [fs1 opt1] fs2 [fs2 opt2])]
                        (if-not (or (not old-hash-val) (= old-hash-val h)) ccmp
                                (recur (execute-option ccmp [id copt]) h)))))))
-        optimize-along-dir (fn optimize [optimization-dir mp]
-                             (let [helper (fn helper [hmp inc-or-dec]
-                                            (let [nhmp (move [optimization-dir inc-or-dec] hmp)
-                                                  {n-x+y-coeff :x+y-coeff n-x-y-coeff :x-y-coeff :as cst-nhmp} (cost-fn nhmp)
-                                                  cst-hmp (cost-fn hmp)]
-                                              (clojure.pprint/pprint (d/self-keyed-map cst-nhmp cst-hmp))
-                                              (if (> cst-nhmp cst-hmp) hmp
-                                                  (recur nhmp inc-or-dec))))
-                                   mp-inc (helper mp :inc)
-                                   cst-mp (cost mp)
-                                   cst-mp-inc (cost mp-inc)]
-                               (if (= cst-mp-inc cst-mp)
-                                 (helper cst-mp :dec) mp-inc)))
+        sgn (fn sgn [x] (cond (< x 0) :neg (> x 0) :pos :else :zero))
+        optimize (fn optimize [mp]
+                   (loop [{:keys [x+y-coeff x-y-coeff] :as cst-cmp} (cost-fn mp) cmp mp [min-xy min-cost] nil]
+                     (println (d/self-keyed-map min-xy min-cost))
+                     (let [[opt1 opt2 :as opts] (filter second [[:x+y (cond
+                                                                       (> x+y-coeff 0) :dec
+                                                                       (< x+y-coeff 0) :inc)]
+                                                                [:x-y (cond
+                                                                       (> x-y-coeff 0) :dec
+                                                                       (< x-y-coeff 0) :inc)]])
+                           mp-try1 (move opt1 cmp)
+                           mp-try1-cost-fn (cost-fn mp-try1)
+                           [n-min-xy n-min-cost :as n-min] (apply min-key second (corners-of-cost-func mp-try1-cost-fn))]
+                       (clojure.pprint/pprint (d/self-keyed-map n-min-xy n-min-cost n-min))
+                       ;(d/display-local-bindings)
+                       (if (or (not min-cost) (< n-min-cost min-cost)) (recur mp-try1-cost-fn mp-try1 n-min)
+                           (if-not opt2 cmp
+                             (let [mp-try2 (move opt2 cmp)
+                                   mp-try2-cost-fn (cost-fn mp-try2)
+                                   [n-min-xy n-min-cost :as n-min] (apply min-key second (corners-of-cost-func mp-try2-cost-fn))]
+                             (if (< n-min-cost min-cost) (recur mp-try2-cost-fn mp-try2 n-min)
+                                 cmp)))))))
         mp {:dx {:+ {:x+y dx+-x+y :x-y dx+-x-y :sum sum-dx+}
                  :- {:x+y dx--x+y :x-y dx--x-y :sum sum-dx-}}
             :dy {:+ {:x+y dy+-x+y :x-y dy+-x-y :sum sum-dy+}
                  :- {:x+y dy--x-y :x-y dy--x-y :sum sum-dy-}}}
-        min-mp (loop [cur-mp mp]
-                 (let [new-mp (->> mp (optimize-along-dir :x+y) (optimize-along-dir :x-y))]
-                   (if (= new-mp mp) mp (recur new-mp))))]
-    (println (cost min-mp))))
+        min-mp (optimize mp)]
+    ))
                 
         
              
