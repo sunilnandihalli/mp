@@ -4,7 +4,9 @@
 	    [clojure.walk :as w]
 	    [clojure.contrib.trace :as t]
             [clojure.contrib.lazy-seqs :as ls])
-  (:import [java.io BufferedReader BufferedWriter FileReader])
+  (:import [java.io BufferedReader BufferedWriter FileReader]
+           [javax.swing JFrame SwingUtilities]
+           java.awt.event.WindowAdapter)
   (:use clojure.inspector))
 
 
@@ -13,8 +15,22 @@
            :state val
            :prefix "throwable-value-")
 
-  
+(defn wait-for
+  [inspector]
+  (let [blocker (promise)
+        adapter (proxy [WindowAdapter] []
+                  (windowClosed [_e] (deliver blocker nil)))]
+    (SwingUtilities/invokeAndWait
+     #(doto inspector
+        (.setDefaultCloseOperation JFrame/DISPOSE_ON_CLOSE)
+        (.addWindowListener adapter)))
+    @blocker))
 
+(defn dbg [val] (wait-for (clojure.inspector/inspect-tree val)) val)
+  
+(defmacro d [frm]
+  `(let [x# ~frm]
+     (wait-for (clojure.inspector/inspect-tree {:form '~frm :val x#})) x#))
 
 #_(throwable-value "hello")    
 
