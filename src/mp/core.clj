@@ -214,12 +214,51 @@ Returns a new priority map with supplied mappings"
 (defn are-there-points-in-intended-direction-of-movement [[dir inc-or-dec] mp]
   (some #(seq (:x+y (get-in mp (:from %)))) (get-in node-movement-map [dir inc-or-dec])))
 
-(defn solve []
-  (let [[n locs] (time (read-stdin))
-        locs (vec (map vec locs))
-        [[xmin xmax] [ymin ymax]] (bounding-box locs 2)
-        [[lim-x+y-min lim-x+y-max] [lim-x-y-min lim-x-y-max]] [[(+ xmin ymin) (+ xmax ymax)] [(- xmin ymax) (- xmax ymin)]]
-        locs-to-id (into {} (map vector locs (range)))
+(defn corners-of-cost-func [{:keys [k x+y-coeff x-y-coeff min-x+y max-x+y min-x-y max-x-y] :as w}]
+  (let [cost (fn [x+y x-y] (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))]
+    (for [x+y [min-x+y max-x+y]
+          x-y [min-x-y max-x-y]]
+      [[x+y x-y] (cost x+y x-y)])))
+       
+(defn sgn [x] (cond (< x 0) :neg (> x 0) :pos :else :zero))
+
+(let [mx 2e9
+      [[lim-x+y-min lim-x+y-max] [lim-x-y-min lim-x-y-max]] [[(- mx) mx] [(- mx) mx]]]     
+  (defn cost-fn [mp]
+    {:pre [mp #_(do (clojure.pprint/pprint mp) true)]
+     :post [#_(d/d {:mp mp :cost-fn %})]}
+    (let [k (- (+ (get-in mp [:dx :+ :sum])
+                  (get-in mp [:dy :+ :sum]))
+               (+ (get-in mp [:dx :- :sum])
+                  (get-in mp [:dy :- :sum])))
+          min-x+y (apply max
+                         (keep identity [(second (first (get-in mp [:dx :- :x+y])))
+                                         (second (first (get-in mp [:dy :- :x+y])))
+                                         lim-x+y-min]))
+          max-x+y (apply min
+                         (keep identity [(second (first (get-in mp [:dx :+ :x+y])))
+                                         (second (first (get-in mp [:dy :+ :x+y])))
+                                         lim-x+y-max]))
+          min-x-y (apply max
+                         (keep identity [(second (first (get-in mp [:dx :- :x-y])))
+                                         (second (first (get-in mp [:dy :+ :x-y])))
+                                         lim-x-y-min]))
+          max-x-y (apply min
+                         (keep identity [(second (first (get-in mp [:dx :+ :x-y])))
+                                         (second (first (get-in mp [:dy :- :x-y])))
+                                         lim-x-y-max]))
+          nx- (count (get-in mp [:dx :- :x+y]))
+          nx+ (count (get-in mp [:dx :+ :x+y]))
+          ny- (count (get-in mp [:dy :- :x+y]))
+          ny+ (count (get-in mp [:dy :+ :x+y]))
+          map-hash [(/ (+ min-x+y max-x+y) 2) (/ (+ min-x-y max-x-y) 2)] 
+          y-coeff (- ny- ny+) x-coeff (- nx- nx+)
+          x+y-coeff (/ (+ x-coeff y-coeff) 2) x-y-coeff (/ (- x-coeff y-coeff) 2)]
+      {:k k :y-coeff y-coeff :x-coeff x-coeff :x+y-coeff x+y-coeff :x-y-coeff x-y-coeff :map-hash map-hash
+       :min-x+y  min-x+y :max-x+y max-x+y :min-x-y  min-x-y :max-x-y max-x-y})))
+       
+(defn initial-map-guess [locs n]
+  (let [locs-to-id (into {} (map vector locs (range)))
         hashes-to-id (into {} (map (fn [[x y] i]
                                      [[(+ x y) (- x y)] i]) locs (range)))
         [xsum ysum] (reduce (fn [[xsum ysum] [x y]] [(+ xsum x) (+ ysum y)]) locs)
@@ -255,114 +294,71 @@ Returns a new priority map with supplied mappings"
         dy+-x-y (into (priority-map-by >) (map (juxt identity x-y-coll) dy+))
         dy--x+y (into (priority-map-by >) (map (juxt identity x+y-coll) dy-))
         dy--x-y (into (priority-map-by <) (map (juxt identity x-y-coll) dy-))
-        
-        cost-fn (fn cost-fn [mp]
-                  {:pre [mp #_(do (clojure.pprint/pprint mp) true)]
-                   :post [#_(d/d {:mp mp :cost-fn %})]}
-                  (let [k (- (+ (get-in mp [:dx :+ :sum])
-                                (get-in mp [:dy :+ :sum]))
-                             (+ (get-in mp [:dx :- :sum])
-                                (get-in mp [:dy :- :sum])))
-                        min-x+y (apply max
-                                       (keep identity [(second (first (get-in mp [:dx :- :x+y])))
-                                                       (second (first (get-in mp [:dy :- :x+y])))
-                                                       lim-x+y-min]))
-                        max-x+y (apply min
-                                       (keep identity [(second (first (get-in mp [:dx :+ :x+y])))
-                                                       (second (first (get-in mp [:dy :+ :x+y])))
-                                                       lim-x+y-max]))
-                        min-x-y (apply max
-                                       (keep identity [(second (first (get-in mp [:dx :- :x-y])))
-                                                       (second (first (get-in mp [:dy :+ :x-y])))
-                                                       lim-x-y-min]))
-                        max-x-y (apply min
-                                       (keep identity [(second (first (get-in mp [:dx :+ :x-y])))
-                                                       (second (first (get-in mp [:dy :- :x-y])))
-                                                       lim-x-y-max]))
-                        nx- (count (get-in mp [:dx :- :x+y]))
-                        nx+ (count (get-in mp [:dx :+ :x+y]))
-                        ny- (count (get-in mp [:dy :- :x+y]))
-                        ny+ (count (get-in mp [:dy :+ :x+y]))
-                        map-hash [(/ (+ min-x+y max-x+y) 2) (/ (+ min-x-y max-x-y) 2)] 
-                        y-coeff (- ny- ny+) x-coeff (- nx- nx+)
-                        x+y-coeff (/ (+ x-coeff y-coeff) 2) x-y-coeff (/ (- x-coeff y-coeff) 2)]
-                    {:k k :y-coeff y-coeff :x-coeff x-coeff :x+y-coeff x+y-coeff :x-y-coeff x-y-coeff :map-hash map-hash
-                     :min-x+y  min-x+y :max-x+y max-x+y :min-x-y  min-x-y :max-x-y max-x-y}))
-        
-        corners-of-cost-func (fn [{:keys [k x+y-coeff x-y-coeff min-x+y max-x+y min-x-y max-x-y] :as w}]
-                               {:pre [#_(clojure.inspector/inspect-tree (d/self-keyed-map k x+y-coeff x-y-coeff min-x+y max-x+y min-x-y max-x-y w))
-                                      w k x+y-coeff x-y-coeff min-x+y max-x+y min-x-y max-x-y]
-                                :post [#_(d/d {:inp w :ret % :locs-to-id locs-to-id})]}
-                               (let [cost (fn [x+y x-y] (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))]
-                                 (for [x+y [min-x+y max-x+y]
-                                       x-y [min-x-y max-x-y]]
-                                   [[x+y x-y] (cost x+y x-y)])))
-        hash-coll {:x+y x+y-coll :x-y x-y-coll}
-        move (fn move [[dir inc-or-dec] mp]
-               {:post [#_(clojure.inspector/inspect-tree {:before (d/self-keyed-map dir inc-or-dec mp locs) :after %})
-                       #_(or (clojure.pprint/pprint {:before (d/self-keyed-map dir inc-or-dec mp locs) :after %}) true) mp]}
-               (when (and dir inc-or-dec mp (are-there-points-in-intended-direction-of-movement [dir inc-or-dec] mp))
-                 (let [execute-option (fn execute-option [cmp  [id {:keys [from to] :as opt}]]
-                                        {:post [cmp %]}
-                                        (let [mdisj (fn mdisj [dx-or-dy m]
-                                                      (-> m
-                                                          (update-in [:x+y] #(dissoc % id))
-                                                          (update-in [:x-y] #(dissoc % id))
-                                                          (update-in [:sum] #(case dx-or-dy
-                                                                                   :dx (let [[x _] (locs id)] (- % x))
-                                                                                   :dy (let [[_ y] (locs id)] (- % y))))))
-                                              mconj (fn mconj [dx-or-dy m]
-                                                      (-> m
-                                                          (update-in [:x+y] #(assoc % id (x+y-coll id)))
-                                                          (update-in [:x-y] #(assoc % id (x-y-coll id)))
-                                                          (update-in [:sum] #(case dx-or-dy
-                                                                                   :dx (let [[x _] (locs id)] (+ % x))
-                                                                                   :dy (let [[_ y] (locs id)] (+ % y))))))]
-                                          (-> cmp
-                                              (update-in from #(mdisj (first from) %))
-                                              (update-in to #(mconj (first to) %)))))
-                       [opt1 opt2 :as opts] (get-in node-movement-map [dir inc-or-dec])
-                       inc-or-dec-fn ({:inc < :dec >} inc-or-dec)]
-                   (loop [ccmp mp old-hash-val nil]
-                     #_(clojure.pprint/pprint (d/self-keyed-map ccmp old-hash-val opts inc-or-dec dir))
-                     (let [[s1 s2] (map #(get-in ccmp (:from %)) opts)
-                           [[id1 h1 :as fs1] [id2 h2 :as fs2]] (map (comp peek dir) [s1 s2])]
-                       (if-let [[[id h] copt] (cond
-                                               (and fs1 fs2) (if (inc-or-dec-fn h1 h2) [fs1 opt1] [fs2 opt2])
-                                               fs1 [fs1 opt1] fs2 [fs2 opt2])]
-                         (if-not (or (not old-hash-val) (= old-hash-val h)) ccmp
-                                 (recur (execute-option ccmp [id copt]) h))
-                         ccmp))))))
-        sgn (fn sgn [x] (cond (< x 0) :neg (> x 0) :pos :else :zero))
-        optimize (fn optimize [mp]
-                   (loop [{:keys [x+y-coeff x-y-coeff] :as cst-cmp} (cost-fn mp) cmp mp [min-xy min-cost] nil]
-                     (println (d/self-keyed-map min-xy min-cost))
-                     (let [[opt1 opt2 :as opts] (filter second [[:x+y (cond
-                                                                       (> x+y-coeff 0) :dec
-                                                                       (< x+y-coeff 0) :inc)]
-                                                                [:x-y (cond
-                                                                       (> x-y-coeff 0) :dec
-                                                                       (< x-y-coeff 0) :inc)]])]
-                       (if-let [mps (seq (keep #(move % cmp) opts))]
-                         (let [[new-cost-fn new-mp [new-min-xy new-min-cost]] (apply min-key (fn [[_ _ [_ x]]] x) 
-                                                                                     (map (fn [mp]
-                                                                                            (let [cst-fnc (cost-fn mp)
-                                                                                                  min-corner (apply min-key second (corners-of-cost-func cst-fnc))]
-                                                                                              [cst-fnc mp min-corner])) mps))]
-                           (if (not (or (not min-cost) (< new-min-cost min-cost))) cmp
-                               (recur new-cost-fn new-mp [new-min-xy new-min-cost]))) cmp))))
         mp {:dx {:+ {:x+y dx+-x+y :x-y dx+-x-y :sum sum-dx+}
                  :- {:x+y dx--x+y :x-y dx--x-y :sum sum-dx-}}
             :dy {:+ {:x+y dy+-x+y :x-y dy+-x-y :sum sum-dy+}
-                 :- {:x+y dy--x-y :x-y dy--x-y :sum sum-dy-}}}
-        min-mp (optimize mp)
-        min-map-cost-func (cost-fn min-mp)
+                 :- {:x+y dy--x-y :x-y dy--x-y :sum sum-dy-}}}]
+    [mp {:locs locs :locs-to-id locs-to-id :hashes-to-id hashes-to-id :x+y-coll x+y-coll :x-y-coll x-y-coll}]))
+
+(defn move [{:keys [locs x+y-coll x-y-coll]} [dir inc-or-dec] mp]
+  (when (and dir inc-or-dec mp (are-there-points-in-intended-direction-of-movement [dir inc-or-dec] mp))
+    (let [execute-option (fn execute-option [cmp  [id {:keys [from to] :as opt}]]
+                           {:post [cmp %]}
+                           (let [mdisj (fn mdisj [dx-or-dy m]
+                                         (-> m
+                                             (update-in [:x+y] #(dissoc % id))
+                                             (update-in [:x-y] #(dissoc % id))
+                                             (update-in [:sum] #(case dx-or-dy
+                                                                      :dx (let [[x _] (locs id)] (- % x))
+                                                                      :dy (let [[_ y] (locs id)] (- % y))))))
+                                 mconj (fn mconj [dx-or-dy m]
+                                         (-> m
+                                             (update-in [:x+y] #(assoc % id (x+y-coll id)))
+                                             (update-in [:x-y] #(assoc % id (x-y-coll id)))
+                                             (update-in [:sum] #(case dx-or-dy
+                                                                      :dx (let [[x _] (locs id)] (+ % x))
+                                                                      :dy (let [[_ y] (locs id)] (+ % y))))))]
+                             (-> cmp
+                                 (update-in from #(mdisj (first from) %))
+                                 (update-in to #(mconj (first to) %)))))
+          [opt1 opt2 :as opts] (get-in node-movement-map [dir inc-or-dec])
+          inc-or-dec-fn ({:inc < :dec >} inc-or-dec)]
+      (loop [ccmp mp old-hash-val nil]
+        (let [[s1 s2] (map #(get-in ccmp (:from %)) opts)
+              [[id1 h1 :as fs1] [id2 h2 :as fs2]] (map (comp peek dir) [s1 s2])]
+          (if-let [[[id h] copt] (cond
+                                  (and fs1 fs2) (if (inc-or-dec-fn h1 h2) [fs1 opt1] [fs2 opt2])
+                                  fs1 [fs1 opt1] fs2 [fs2 opt2])]
+            (if-not (or (not old-hash-val) (= old-hash-val h)) ccmp
+                    (recur (execute-option ccmp [id copt]) h))
+            ccmp))))))
+
+(defn optimize [whole-problem mp]
+  (loop [{:keys [x+y-coeff x-y-coeff] :as cst-cmp} (cost-fn mp) cmp mp [min-xy min-cost] nil]
+    (println (d/self-keyed-map min-xy min-cost))
+    (let [[opt1 opt2 :as opts] (filter second [[:x+y (cond
+                                                      (> x+y-coeff 0) :dec
+                                                      (< x+y-coeff 0) :inc)]
+                                               [:x-y (cond
+                                                      (> x-y-coeff 0) :dec
+                                                      (< x-y-coeff 0) :inc)]])]
+      (if-let [mps (seq (keep #(move whole-problem % cmp) opts))]
+        (let [[new-cost-fn new-mp [new-min-xy new-min-cost]] (apply min-key (fn [[_ _ [_ x]]] x) 
+                                                                    (map (fn [mp]
+                                                                           (let [cst-fnc (cost-fn mp)
+                                                                                 min-corner (apply min-key second (corners-of-cost-func cst-fnc))]
+                                                                             [cst-fnc mp min-corner])) mps))]
+          (if (not (or (not min-cost) (< new-min-cost min-cost))) cmp
+              (recur new-cost-fn new-mp [new-min-xy new-min-cost]))) cmp))))
+
+(defn find-point-closest-to-minimum-point [{:keys [hashes-to-id] :as whole-problem} min-mp]
+  (let [min-map-cost-func (cost-fn min-mp)
         starting-point-front (into (priority-map) (corners-of-cost-func min-map-cost-func))
         maps-with-cost-increasing-envelope (loop [map-collection #{min-mp}  [fmap-front & rmaps-front] [min-mp]]
                                              (if-not fmap-front map-collection
                                                      (let [{:keys [x+y-coeff x-y-coeff]} (cost-fn fmap-front)
                                                            new-maps (filter (comp not map-collection)
-                                                                            (keep #(move % fmap-front)
+                                                                            (keep #(move whole-problem % fmap-front)
                                                                                   [[:x+y (cond
                                                                                           (< x+y-coeff 0) :inc
                                                                                           (> x+y-coeff 0) :dec)]
@@ -410,7 +406,7 @@ Returns a new priority map with supplied mappings"
                                                                new-mcp (dissoc mcp leaving-map-hash)
                                                                new-map-hash-map-pairs (filter (comp not mhtm first)
                                                                                               (map (juxt (comp :map-hash cost-fn) identity)
-                                                                                                   (keep #(move % leaving-map) opts)))
+                                                                                                   (keep #(move whole-problem % leaving-map) opts)))
                                                                [nnn-pcbm nnn-mcp nnn-pp nnn-mhtm] (reduce (fn [[n-pcbm n-mcp n-pp n-mhtm] [mp-hash mp]]
                                                                                                             (let [map-cost-fn (cost-fn mp)
                                                                                                                   point-priority-pairs (corners-of-cost-func map-cost-fn)
@@ -431,6 +427,14 @@ Returns a new priority map with supplied mappings"
                                            (reduce advance-map [cur-map-contributes-points cur-point-contributed-by-maps (pop cur-points-priority-map) cur-map-hash-to-map]
                                                    maps-contributing-current-point)]
                                        (recur new-points-priority-map new-point-contributed-by-maps new-map-contributes-points new-map-hash-to-map)))))]
+    [min-point min-cost]))
+
+(defn solve []
+  (let [[n locs] (time (read-stdin))
+        locs (vec (map vec locs))
+        [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
+        min-mp (optimize whole-problem mp)
+        [min-point min-cost] (find-point-closest-to-minimum-point whole-problem min-mp)]
     (let [[bf-min-loc bf-min-cost] (brute-force-solve locs)]
       (display locs-to-id locs)
       (println (merge (d/self-keyed-map bf-min-loc bf-min-cost)
