@@ -351,7 +351,8 @@ Returns a new priority map with supplied mappings"
           (if (not (or (not min-cost) (< new-min-cost min-cost))) cmp
               (recur new-cost-fn new-mp [new-min-xy new-min-cost]))) cmp))))
 
-(defn find-point-closest-to-minimum-point [{:keys [hashes-to-id] :as whole-problem} min-mp]
+
+(defn initialize-point-search-front [whole-problem min-mp]
   (let [min-map-cost-func (cost-fn min-mp)
         starting-point-front (into (priority-map) (corners-of-cost-func min-map-cost-func))
         maps-with-cost-increasing-envelope (loop [map-collection #{min-mp}  [fmap-front & rmaps-front] [min-mp]]
@@ -366,20 +367,54 @@ Returns a new priority map with supplied mappings"
                                                                                           (< x-y-coeff 0) :inc
                                                                                           (> x-y-coeff 0) :dec)]]))]
                                                        (recur (into map-collection new-maps) (into rmaps-front new-maps)))))
-                       
-        [points-priority-map
-         point-contributed-by-maps
-         map-contributes-points
-         map-hash-to-map] (reduce (fn [[ppl pcbm mcp mhtm] cmp]
-                                    (let [{:keys [max-x+y min-x+y max-x-y min-x-y map-hash] :as cfn} (cost-fn cmp)
-                                          point-priority-pairs (corners-of-cost-func cfn)]
-                                      (conj (reduce (fn [[cppl cpcbm cmcp] [hash-coord prty :as pp]]
-                                                      [(conj cppl pp)
-                                                       (update-in cpcbm [hash-coord] #(conj (or % #{}) map-hash))
-                                                       (update-in cmcp [map-hash] #(conj (or % #{}) hash-coord))])
-                                                    [ppl pcbm mcp]
-                                                    point-priority-pairs) (assoc mhtm map-hash cmp))))
-         [(priority-map) {} {} {}] maps-with-cost-increasing-envelope) 
+        [points-priority-map point-contributed-by-maps map-contributes-points map-hash-to-map]
+        (reduce (fn [[ppl pcbm mcp mhtm] cmp]
+                  (let [{:keys [max-x+y min-x+y max-x-y min-x-y map-hash] :as cfn} (cost-fn cmp)
+                        point-priority-pairs (corners-of-cost-func cfn)]
+                    (conj (reduce (fn [[cppl cpcbm cmcp] [hash-coord prty :as pp]]
+                                    [(conj cppl pp)
+                                     (update-in cpcbm [hash-coord] #(conj (or % #{}) map-hash))
+                                     (update-in cmcp [map-hash] #(conj (or % #{}) hash-coord))])
+                                  [ppl pcbm mcp]
+                                  point-priority-pairs) (assoc mhtm map-hash cmp))))
+                [(priority-map) {} {} {}] maps-with-cost-increasing-envelope)]
+    [points-priority-map point-contributed-by-maps map-contributes-points map-hash-to-map]))
+
+(defn advance-map [whole-problem [mcp pcbm ppm mhtm] leaving-map-hash]
+  (let [leaving-map (mhtm leaving-map-hash)
+        {:keys [x+y-coeff x-y-coeff] :as lmcfn} (cost-fn leaving-map)  
+        opts (let [switcher (comp {1 [:inc] -1 [:dec] 0 [:inc :dec]} #(compare % 0))]
+               (concat (map #(vector :x+y %) (switcher x+y-coeff))
+                       (map #(vector :x-y %) (switcher x-y-coeff))))
+        new-pcbm (reduce (fn [npcbm pt]
+                           (let [npcbm-pt (npcbm pt)
+                                 new-npcbm-pt (disj npcbm-pt leaving-map-hash)]
+                             (if-not (seq new-npcbm-pt) (dissoc npcbm pt)
+                                     (assoc npcbm pt new-npcbm-pt)))) pcbm
+                                     (mcp leaving-map-hash))
+        new-mcp (dissoc mcp leaving-map-hash)
+        new-map-hash-map-pairs (filter (comp not mhtm first)
+                                       (map (juxt (comp :map-hash cost-fn) identity)
+                                            (keep #(move whole-problem % leaving-map) opts)))
+        [nnn-pcbm nnn-mcp nnn-pp nnn-mhtm] (reduce (fn [[n-pcbm n-mcp n-pp n-mhtm] [mp-hash mp]]
+                                                     (let [map-cost-fn (cost-fn mp)
+                                                           point-priority-pairs (corners-of-cost-func map-cost-fn)
+                                                           nn-pcbm (reduce
+                                                                    (fn [cn-pcbm [pt-hash _]]
+                                                                      (update-in cn-pcbm [pt-hash]
+                                                                                 #(conj (or % #{}) mp-hash)))
+                                                                    n-pcbm point-priority-pairs)
+                                                           nn-mcp (assoc n-mcp mp-hash
+                                                                         (set (map first point-priority-pairs)))
+                                                           nn-pp (into n-pp point-priority-pairs)
+                                                           nn-mhtm (assoc n-mhtm mp-hash mp)]
+                                                       [nn-pcbm nn-mcp nn-pp nn-mhtm]))
+                                                   [new-pcbm new-mcp ppm (dissoc mhtm leaving-map-hash)]
+                                                   new-map-hash-map-pairs)]
+    [nnn-mcp nnn-pcbm nnn-pp nnn-mhtm]))
+      
+(defn find-point-closest-to-minimum-point [{:keys [hashes-to-id] :as whole-problem} min-mp]
+  (let [[points-priority-map point-contributed-by-maps map-contributes-points map-hash-to-map] (initialize-point-search-front whole-problem min-mp)
         [min-point min-cost] (loop [cur-points-priority-map points-priority-map
                                     cur-point-contributed-by-maps point-contributed-by-maps
                                     cur-map-contributes-points map-contributes-points
@@ -387,44 +422,9 @@ Returns a new priority map with supplied mappings"
                                (let [[cur-optimum-point-hash cur-point-cost :as w] (peek cur-points-priority-map)]
                                  (if (hashes-to-id cur-optimum-point-hash) w
                                      (let [maps-contributing-current-point (set (cur-point-contributed-by-maps cur-optimum-point-hash))
-                                           advance-map (fn advance-map [[mcp pcbm ppm mhtm] leaving-map-hash]
-                                                         {:pre [#_(or (println (d/self-keyed-map leaving-map-hash mcp ppm mhtm)) true)]
-                                                          :post [#_(d/d {:before (d/self-keyed-map mcp pcbm ppm mhtm leaving-map-hash)
-                                                                         :after (let [[mcp pcbm ppm mhtm] %]
-                                                                                  (d/self-keyed-map mcp pcbm ppm mhtm))})]}
-                                                         (let [leaving-map (mhtm leaving-map-hash)
-                                                               {:keys [x+y-coeff x-y-coeff] :as lmcfn} (cost-fn leaving-map)  
-                                                               opts (let [switcher (comp {1 [:inc] -1 [:dec] 0 [:inc :dec]} #(compare % 0))]
-                                                                      (concat (map #(vector :x+y %) (switcher x+y-coeff))
-                                                                              (map #(vector :x-y %) (switcher x-y-coeff))))
-                                                               new-pcbm (reduce (fn [npcbm pt]
-                                                                                  (let [npcbm-pt (npcbm pt)
-                                                                                        new-npcbm-pt (disj npcbm-pt leaving-map-hash)]
-                                                                                    (if-not (seq new-npcbm-pt) (dissoc npcbm pt)
-                                                                                            (assoc npcbm pt new-npcbm-pt)))) pcbm
-                                                                                            (mcp leaving-map-hash))
-                                                               new-mcp (dissoc mcp leaving-map-hash)
-                                                               new-map-hash-map-pairs (filter (comp not mhtm first)
-                                                                                              (map (juxt (comp :map-hash cost-fn) identity)
-                                                                                                   (keep #(move whole-problem % leaving-map) opts)))
-                                                               [nnn-pcbm nnn-mcp nnn-pp nnn-mhtm] (reduce (fn [[n-pcbm n-mcp n-pp n-mhtm] [mp-hash mp]]
-                                                                                                            (let [map-cost-fn (cost-fn mp)
-                                                                                                                  point-priority-pairs (corners-of-cost-func map-cost-fn)
-                                                                                                                  nn-pcbm (reduce
-                                                                                                                           (fn [cn-pcbm [pt-hash _]]
-                                                                                                                             (update-in cn-pcbm [pt-hash]
-                                                                                                                                        #(conj (or % #{}) mp-hash)))
-                                                                                                                           n-pcbm point-priority-pairs)
-                                                                                                                  nn-mcp (assoc n-mcp mp-hash
-                                                                                                                                (set (map first point-priority-pairs)))
-                                                                                                                  nn-pp (into n-pp point-priority-pairs)
-                                                                                                                  nn-mhtm (assoc n-mhtm mp-hash mp)]
-                                                                                                              [nn-pcbm nn-mcp nn-pp nn-mhtm]))
-                                                                                                          [new-pcbm new-mcp ppm (dissoc mhtm leaving-map-hash)]
-                                                                                                          new-map-hash-map-pairs)]
-                                                           [nnn-mcp nnn-pcbm nnn-pp nnn-mhtm]))
                                            [new-map-contributes-points new-point-contributed-by-maps new-points-priority-map new-map-hash-to-map]
-                                           (reduce advance-map [cur-map-contributes-points cur-point-contributed-by-maps (pop cur-points-priority-map) cur-map-hash-to-map]
+                                           (reduce (partial advance-map whole-problem)
+                                                   [cur-map-contributes-points cur-point-contributed-by-maps (pop cur-points-priority-map) cur-map-hash-to-map]
                                                    maps-contributing-current-point)]
                                        (recur new-points-priority-map new-point-contributed-by-maps new-map-contributes-points new-map-hash-to-map)))))]
     [min-point min-cost]))
