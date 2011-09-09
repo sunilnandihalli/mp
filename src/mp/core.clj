@@ -389,23 +389,18 @@ Returns a new priority map with supplied mappings"
         new-pcbm (reduce (fn [npcbm pt]
                            (let [npcbm-pt (npcbm pt)
                                  new-npcbm-pt (disj npcbm-pt leaving-map-hash)]
-                             (if-not (seq new-npcbm-pt) (dissoc npcbm pt)
-                                     (assoc npcbm pt new-npcbm-pt)))) pcbm
-                                     (mcp leaving-map-hash))
+                             (if-not (seq new-npcbm-pt) (dissoc npcbm pt) (assoc npcbm pt new-npcbm-pt))))
+                         pcbm (mcp leaving-map-hash))
         new-mcp (dissoc mcp leaving-map-hash)
-        new-map-hash-map-pairs (filter (comp not mhtm first)
-                                       (map (juxt (comp :map-hash cost-fn) identity)
-                                            (keep #(move whole-problem % leaving-map) opts)))
+        new-map-hash-map-pairs (->> (keep #(move whole-problem % leaving-map) opts)
+                                    (map (juxt (comp :map-hash cost-fn) identity))
+                                    (filter (comp not mhtm first)))
         [nnn-pcbm nnn-mcp nnn-pp nnn-mhtm] (reduce (fn [[n-pcbm n-mcp n-pp n-mhtm] [mp-hash mp]]
                                                      (let [map-cost-fn (cost-fn mp)
                                                            point-priority-pairs (corners-of-cost-func map-cost-fn)
-                                                           nn-pcbm (reduce
-                                                                    (fn [cn-pcbm [pt-hash _]]
-                                                                      (update-in cn-pcbm [pt-hash]
-                                                                                 #(conj (or % #{}) mp-hash)))
-                                                                    n-pcbm point-priority-pairs)
-                                                           nn-mcp (assoc n-mcp mp-hash
-                                                                         (set (map first point-priority-pairs)))
+                                                           nn-pcbm (reduce (fn [cn-pcbm [pt-hash _]] (update-in cn-pcbm [pt-hash] #(conj (or % #{}) mp-hash)))
+                                                                           n-pcbm point-priority-pairs)
+                                                           nn-mcp (assoc n-mcp mp-hash (set (map first point-priority-pairs)))
                                                            nn-pp (into n-pp point-priority-pairs)
                                                            nn-mhtm (assoc n-mhtm mp-hash mp)]
                                                        [nn-pcbm nn-mcp nn-pp nn-mhtm]))
