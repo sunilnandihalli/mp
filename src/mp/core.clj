@@ -217,18 +217,18 @@ Returns a new priority map with supplied mappings"
   (some #(seq (:x+y (get-in mp (:from %)))) (get-in node-movement-map [dir inc-or-dec])))
 
 (defn corners-of-cost-func [{:keys [locs] :as whole-problem} {:keys [k x+y-coeff x-y-coeff min-x+y max-x+y min-x-y max-x-y] :as w}]
-  {:post [(let [cost-bf (fn [x+y x-y]
-                          (let [x (/ (+ x+y x-y) 2) y (/ (- x+y x-y) 2)]
-                            (reduce (fn [s [xi yi]] (+ s (max (abs (- x xi)) (abs (- y yi))))) 0 locs)))
-                preds (doall (map (fn [[[x+y x-y] cst]]
-                                    (let [cst-bf (cost-bf x+y x-y)]
-                                      (if (= cst-bf cst) true
-                                          (println (d/self-keyed-map x+y x-y cst cst-bf))))) %))]
-            (if-not (every? identity preds) (do (clojure.inspector/inspect-tree (d/self-keyed-map locs w))
-                                                (clojure.inspector/inspect-tree (doall
-                                                                                 (for [x-or-y [:dx :dy] +-or-- [:+ :-] dir [:x+y :x-y]]
-                                                                                   [[x-or-y +-or-- dir] ((juxt class seq peek) (get-in (:mp w) [x-or-y +-or-- dir]))])))
-                                                nil) true))]}
+  {:post [#_(let [cost-bf (fn [x+y x-y]
+                            (let [x (/ (+ x+y x-y) 2) y (/ (- x+y x-y) 2)]
+                              (reduce (fn [s [xi yi]] (+ s (max (abs (- x xi)) (abs (- y yi))))) 0 locs)))
+                  preds (doall (map (fn [[[x+y x-y] cst]]
+                                      (let [cst-bf (cost-bf x+y x-y)]
+                                        (if (= cst-bf cst) true
+                                            (println (d/self-keyed-map x+y x-y cst cst-bf))))) %))]
+              (if-not (every? identity preds) (do (clojure.inspector/inspect-tree (d/self-keyed-map locs w))
+                                                  (clojure.inspector/inspect-tree (doall
+                                                                                   (for [x-or-y [:dx :dy] +-or-- [:+ :-] dir [:x+y :x-y]]
+                                                                                     [[x-or-y +-or-- dir] ((juxt class seq peek) (get-in (:mp w) [x-or-y +-or-- dir]))])))
+                                                  nil) true))]}
   (let [cost (fn [x+y x-y] (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))] 
     (for [x+y [min-x+y max-x+y]
           x-y [min-x-y max-x-y]]
@@ -239,9 +239,7 @@ Returns a new priority map with supplied mappings"
 (let [mx 2e9
       [[lim-x+y-min lim-x+y-max] [lim-x-y-min lim-x-y-max]] [[(- mx) mx] [(- mx) mx]]]     
   (defn cost-fn [whole-problem mp]
-    {:pre [mp #_(do (clojure.pprint/pprint mp) true)]
-     :post [#_(d/d {:mp mp :cost-fn %})]}
-    (let [k (- (+ (get-in mp [:dx :+ :sum])
+     (let [k (- (+ (get-in mp [:dx :+ :sum])
                   (get-in mp [:dy :+ :sum]))
                (+ (get-in mp [:dx :- :sum])
                   (get-in mp [:dy :- :sum])))
@@ -292,7 +290,6 @@ Returns a new priority map with supplied mappings"
                                                             [dx+ dx- (conj dy+ cid) dy- n-x+y-coll n-x-y-coll ncid] 
                                                             [(conj dx+ cid) dx- dy+ dy- n-x+y-coll n-x-y-coll ncid]))))
                                                     (conj (vec (repeatedly 6 #(vector-of :int))) 0) locs)
-                                        ;_ (clojure.inspector/inspect-tree (d/self-keyed-map dx+ dx- dy+ dy-))
         [sum-dx+ sum-dx-] (map #(reduce (fn [s i]
                                           (let [[x _] (locs i)]
                                             (+ s x))) 0 %) [dx+ dx-])
@@ -313,9 +310,6 @@ Returns a new priority map with supplied mappings"
             :dy {:+ {:x+y dy+-x+y :x-y dy+-x-y :sum sum-dy+}
                  :- {:x+y dy--x+y :x-y dy--x-y :sum sum-dy-}}}
         whole-problem {:locs locs :locs-to-id locs-to-id :hashes-to-id hashes-to-id :x+y-coll x+y-coll :x-y-coll x-y-coll}]
-    (d/d (d/self-keyed-map mp xav yav k-x+y k-x-y locs))
-    (display locs-to-id locs)
-    (d/d (corners-of-cost-func whole-problem (cost-fn whole-problem mp)))
     [mp whole-problem]))
 
 (defn move [{:keys [locs x+y-coll x-y-coll]} [dir inc-or-dec] mp]
@@ -448,10 +442,7 @@ Returns a new priority map with supplied mappings"
         [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
         min-mp (optimize whole-problem mp)
         [min-point min-cost] (find-point-closest-to-minimum-point whole-problem min-mp)]
-    (let [[bf-min-loc bf-min-cost] (brute-force-solve locs)]
-      (display locs-to-id locs)
-      (println (merge (d/self-keyed-map bf-min-loc bf-min-cost)
-                      {:bf-id (locs-to-id bf-min-loc) :id (hashes-to-id min-point) :cost min-cost})))))
+    {:id (hashes-to-id min-point) :cost min-cost}))
 
 (defn -main []
   (solve))
