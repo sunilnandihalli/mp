@@ -204,6 +204,67 @@ Returns a new priority map with supplied mappings"
                             (+ cst (max (abs (- x xi)) (abs (- y yi))))) 0 locs))]
     (apply min-key second (map (juxt identity mcost) locs))))
 
+(defn front-node-priority [{:keys [locs] [[xmin xmax] [ymin ymax]] :bbox} p-1 p p+1]
+  (if-not p nil
+          (let [[[x-1 y-1] [x y] [x+1 y+1]] (map #(when % (locs %)) [p-1 p p+1])
+                prty (apply min (keep identity [(when (and p-1 p+1 (> x-1 x) (> x+1 x)) (+ x (- y+1 y-1)))
+                                                (when (and p-1 p+1 (= x-1 x x+1)) (inc xmax))
+                                                (when (and p+1 (> x+1 x)) (+ x (* 2 (- y+1 ymin))))
+                                                (when (and p-1 (> x-1 x)) (+ x (* 2 (- ymax y-1))))
+                                                (inc xmax)]))]
+            prty)))
+(defn points-on-either-side [{:keys [locs]} front p n]
+  (let [[x0 y0] (locs p)
+        before-p (take n (concat (map second (rsubseq front < y0)) (repeat nil)))
+        after-p (take n (concat (map second (subseq front > y0)) (repeat nil)))]
+    (concat (reverse before-p) [p] after-p)))
+
+(defn two-points-on-either-side [{:keys [locs]} front p]
+  (let [[x0 y0] (locs p)
+        [p-1 p-2] (map second (rsubseq front < y0))
+        [p+1 p+2] (map second (subseq front > y0))]
+    [p-2 p-1 p p+1 p+2]))
+
+(defn update-priorities [whole-problem pf affected-nodes]
+  (let [affected-triplets (partition 3 1 affected-nodes)]
+    (reduce (fn [cpf [p-1 p p+1]]
+              (if p (assoc cpf p (front-node-priority whole-problem p-1 p p+1)) cpf)) pf affected-triplets)))
+
+(defn add-node [{:keys [locs locs-to-id] :as whole-problem} w [cx cy :as np]]
+  (let [new-node-id (locs-to-id np)
+        w (if-let [p (get-in w [:front cy])]
+            (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side whole-problem (:front w) p)
+                  w (update-in w [:graph-edges] #(into % (filter first [[p new-node-id] [p-1 new-node-id] [p+1 new-node-id]])))
+                  w (assoc-in w [:front cy] new-node-id)
+                  w (update-in w [:pfront] #(dissoc % p))
+                  w (update-in w [:pfront] #(update-priorities whole-problem % [p-2 p-1 new-node-id p+1 p+2]))]
+              w)
+            (let [w (assoc-in w [:front cy] new-node-id)
+                  [p-2 p-1 p p+1 p+2 ] (two-points-on-either-side whole-problem (:front w) new-node-id)
+                  w (update-in w [:graph-edges] #(into % (filter first [[p-1 new-node-id] [p+1 new-node-id]])))
+                  w (update-in w [:pfront] #(update-priorities whole-problem % [p-2 p-1 new-node-id p+1 p+2]))]
+              w))
+        w (loop [{ge :graph-edges f :front pf :pfront :as w} w]
+            (let [[cid s-max] (peek pf)]
+              (if (< cx s-max) w
+                  (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side whole-problem f cid)
+                        [x y] (locs cid)
+                        new-f (dissoc f y)
+                        new-pf (-> (dissoc pf p) (update-priorities whole-problem [p-2 p-1 p+1 p+2]))
+                        new-ge (if (and p-1 p+1) (conj ge [p-1 p+1]) ge)]
+                    (recur {:front new-f :pfront new-pf :graph-edges new-ge})))))]
+    w))
+
+(defn vornoi-graph [{:keys [locs locs-to-id] [[xmin xmax] [ymin ymax]] :bbox :as whole-problem}]
+  (let [[[_ fy :as floc] & rlocs] (sort locs)
+        fid (locs-to-id floc)
+        {vornoi-graph-edges :graph-edges} (reduce (partial add-node whole-problem)
+                                                  {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :boundary-nodes #{fid} :graph-edges []} rlocs)
+        vornoi-graph  (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
+                                (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges)]
+    vornoi-graph))
+      
+
 (def node-movement-map {:x+y {:dec [{:from [:dy :-] :to [:dx :+]}
                                     {:from [:dx :-] :to [:dy :+]}]
                               :inc [{:from [:dx :+] :to [:dy :-]}
@@ -273,6 +334,7 @@ Returns a new priority map with supplied mappings"
   (let [locs-to-id (into {} (map vector locs (range)))
         hashes-to-id (into {} (map (fn [[x y] i]
                                      [[(+ x y) (- x y)] i]) locs (range)))
+        bbox (bounding-box locs)
         [xsum ysum] (reduce (fn [[xsum ysum] [x y]] [(+ xsum x) (+ ysum y)]) locs)
         [xav yav] [(/ xsum n) (/ ysum n)]
         [k-x+y k-x-y] [(+ xav yav) (- xav yav)]
@@ -309,7 +371,7 @@ Returns a new priority map with supplied mappings"
                  :- {:x+y dx--x+y :x-y dx--x-y :sum sum-dx-}}
             :dy {:+ {:x+y dy+-x+y :x-y dy+-x-y :sum sum-dy+}
                  :- {:x+y dy--x+y :x-y dy--x-y :sum sum-dy-}}}
-        whole-problem {:locs locs :locs-to-id locs-to-id :hashes-to-id hashes-to-id :x+y-coll x+y-coll :x-y-coll x-y-coll}]
+        whole-problem {:bbox bbox :locs locs :locs-to-id locs-to-id :hashes-to-id hashes-to-id :x+y-coll x+y-coll :x-y-coll x-y-coll}]
     [mp whole-problem]))
 
 (defn move [{:keys [locs x+y-coll x-y-coll]} [dir inc-or-dec] mp]
@@ -440,6 +502,7 @@ Returns a new priority map with supplied mappings"
   (let [[n locs] (time (read-stdin))
         locs (vec (map vec locs))
         [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
+        vornoi-graph (vornoi-graph whole-problem)
         min-mp (optimize whole-problem mp)
         [min-point min-cost] (find-point-closest-to-minimum-point whole-problem min-mp)]
     {:id (hashes-to-id min-point) :cost min-cost}))
