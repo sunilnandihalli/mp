@@ -160,14 +160,11 @@ Returns a new priority map with supplied mappings"
 (defmacro thrush-with-pattern [[pattern] first & exprs]
   (if (seq exprs) `(let [~pattern ~first] (thrush-with-pattern [~pattern] ~@exprs)) first))
 
-
-
 (defmacro thrush-with-pattern-dbg [[pattern] first & exprs]
   (if (seq exprs) `(let [s# ~first
                          ~pattern s#]
                       (clojure.pprint/pprint ['~first s#])
                       (thrush-with-pattern-dbg [~pattern] ~@exprs)) first))
-
 
 (defn read-stdin [& {:keys [fname] :or {fname "inp.txt"}}]
   (let [vs (or (seq (doall (line-seq (java.io.BufferedReader. *in*))))
@@ -204,7 +201,7 @@ Returns a new priority map with supplied mappings"
                             (+ cst (max (abs (- x xi)) (abs (- y yi))))) 0 locs))]
     (apply min-key second (map (juxt identity mcost) locs))))
 
-(defn front-node-priority [{:keys [locs] [[xmin xmax] [ymin ymax]] :bbox} p-1 p p+1]
+(defn front-node-priority [{:keys [locs] [[xmin xmax] [ymin ymax]] :bbox :as whole-problem} p-1 p p+1]
   (if-not p nil
           (let [[[x-1 y-1] [x y] [x+1 y+1]] (map #(when % (locs %)) [p-1 p p+1])
                 prty (apply min (keep identity [(when (and p-1 p+1 (> x-1 x) (> x+1 x)) (+ x (- y+1 y-1)))
@@ -244,13 +241,14 @@ Returns a new priority map with supplied mappings"
                   w (update-in w [:graph-edges] #(into % (filter first [[p-1 new-node-id] [p+1 new-node-id]])))
                   w (update-in w [:pfront] #(update-priorities whole-problem % [p-2 p-1 new-node-id p+1 p+2]))]
               w))
+        update-priorities-whole-problem (partial update-priorities whole-problem)
         w (loop [{ge :graph-edges f :front pf :pfront :as w} w]
             (let [[cid s-max] (peek pf)]
               (if (< cx s-max) w
                   (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side whole-problem f cid)
                         [x y] (locs cid)
                         new-f (dissoc f y)
-                        new-pf (-> (dissoc pf p) (update-priorities whole-problem [p-2 p-1 p+1 p+2]))
+                        new-pf (-> (dissoc pf p) (update-priorities-whole-problem [p-2 p-1 p+1 p+2]))
                         new-ge (if (and p-1 p+1) (conj ge [p-1 p+1]) ge)]
                     (recur {:front new-f :pfront new-pf :graph-edges new-ge})))))]
     w))
@@ -409,7 +407,7 @@ Returns a new priority map with supplied mappings"
 
 (defn optimize [whole-problem mp]
   (loop [{:keys [x+y-coeff x-y-coeff] :as cst-cmp} (cost-fn whole-problem mp) cmp mp [min-xy min-cost] nil]
-    (println (d/self-keyed-map min-xy min-cost))
+    ;(println (d/self-keyed-map min-xy min-cost))
     (let [[opt1 opt2 :as opts] (filter second [[:x+y (cond
                                                       (> x+y-coeff 0) :dec
                                                       (< x+y-coeff 0) :inc)]
@@ -424,6 +422,15 @@ Returns a new priority map with supplied mappings"
                                                                              [cst-fnc mp min-corner])) mps))]
           (if (not (or (not min-cost) (< new-min-cost min-cost))) cmp
               (recur new-cost-fn new-mp [new-min-xy new-min-cost]))) cmp))))
+
+(defn dist [[x1 y1] [x2 y2]] (max (abs (- x1 x2)) (abs (- y1 y2))))
+
+(defn find-vornoi-cell [{:keys [locs]} vornoi-graph starting-cell-id [x y]]
+  (loop [c-cell-id starting-cell-id]
+    (let [mdist #(dist [x y] (locs %))
+          min-neighbouring-cell-id (apply min-key mdist (vornoi-graph c-cell-id))]
+      (if (< (mdist min-neighbouring-cell-id) (mdist c-cell-id))
+        (recur min-neighbouring-cell-id) c-cell-id))))
 
 
 (defn initialize-point-search-front [whole-problem min-mp]
@@ -498,14 +505,36 @@ Returns a new priority map with supplied mappings"
                                        (recur new-points-priority-map new-point-contributed-by-maps new-map-contributes-points new-map-hash-to-map)))))]
     [min-point min-cost]))
 
-(defn solve []
-  (let [[n locs] (time (read-stdin))
+(defn solve-hashing-hashing []
+  (let [[n locs] (read-stdin)
         locs (vec (map vec locs))
         [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
-        vornoi-graph (vornoi-graph whole-problem)
         min-mp (optimize whole-problem mp)
-        [min-point min-cost] (find-point-closest-to-minimum-point whole-problem min-mp)]
-    {:id (hashes-to-id min-point) :cost min-cost}))
+        [[xmp ymp :as min-point] min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
+        [closest-point min-cost-actual] (let [[dx+ dx- dy+ dy-] (map #(get-in min-mp (conj % :x+y)) (for [dir [:dx :dy] sgn [:+ :-]] [dir sgn]))
+                                              pts (map (fn fnc-coll [[fnc coll]]
+                                                         (first (apply min-key second (map (juxt identity (comp fnc locs)) (keys coll)))))
+                                                       [[#(- (first %) xmp) dx+]
+                                                        [#(- xmp (first %)) dx-]
+                                                        [#(- (second %) ymp) dy+]
+                                                        [#(- ymp (second %)) dy-]])]
+                                          (println pts)
+                                          (apply min-key second (map (fn [pt] [pt (reduce  #(+ %1 (dist (locs pt) %2)) 0 locs)]) pts)))]
+    {:id closest-point :cost min-cost-actual}))
+        
+                        
+    
+  
+
+(defn solve-vornoi-hashing []
+  (let [[n locs] (time (read-stdin))
+        locs (vec (map vec locs))
+        [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] ((d/timed initial-map-guess) locs n)
+        vornoi-graph ((d/timed vornoi-graph) whole-problem)
+        min-mp ((d/timed optimize) whole-problem mp)
+        [min-point min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
+        min-existing-node ((d/timed find-vornoi-cell) whole-problem vornoi-graph 0 min-point)]
+    {:id min-existing-node :cost min-cost}))
 
 (defn -main []
   (solve))
