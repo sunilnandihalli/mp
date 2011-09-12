@@ -450,21 +450,21 @@ Returns a new priority map with supplied mappings"
 
 (defn move-to [whole-problem starting-map [x+y x-y]]
   (loop [cmp starting-map]
-    (let [{:keys [min-x+y max-x+y min-x-y max-x-y] :as cst} (d/d (cost-fn whole-problem cmp))]
+    (let [{:keys [min-x+y max-x+y min-x-y max-x-y] :as cst} (cost-fn whole-problem cmp)]
       (cond
-       (< x+y min-x+y) (recur (move whole-problem [:x+y :inc] cmp))
-       (> x+y max-x+y) (recur (move whole-problem [:x+y :dec] cmp))
-       (< x-y min-x-y) (recur (move whole-problem [:x-y :inc] cmp))
-       (> x-y min-x-y) (recur (move whole-problem [:x-y :dec] cmp))))))
+       (< x+y min-x+y) (recur (move whole-problem [:x+y :dec] cmp))
+       (> x+y max-x+y) (recur (move whole-problem [:x+y :inc] cmp))
+       (< x-y min-x-y) (recur (move whole-problem [:x-y :dec] cmp))
+       (> x-y min-x-y) (recur (move whole-problem [:x-y :inc] cmp))
+       :else cmp))))
 
 (defn find-min-cost-among [{:keys [locs x+y-coll x-y-coll] :as whole-problem} pts mp]
   (let [ordered-pts (into (priority-map) (map (juxt identity (juxt x+y-coll x-y-coll)) pts))]
-    (println ordered-pts)
-    (second (reduce (fn [[cur-mp cur-pt-cost-pairs] [pid [x+y x-y]]]
-                      (let [new-mp (move-to whole-problem cur-mp [x+y x-y])
-                            {:keys [k x+y-coeff x-y-coeff]} (cost-fn new-mp)]
-                        [new-mp (assoc cur-pt-cost-pairs pid (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))]))
-                    [mp (priority-map)] ordered-pts)))) 
+    (peek (second (reduce (fn [[cur-mp cur-pt-cost-pairs] [pid [x+y x-y]]]
+                            (let [new-mp (move-to whole-problem cur-mp [x+y x-y])
+                                  {:keys [k x+y-coeff x-y-coeff]} (cost-fn whole-problem new-mp)]
+                              [new-mp (assoc cur-pt-cost-pairs pid (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))]))
+                          [mp (priority-map)] ordered-pts))))) 
 
 (defn optimize [whole-problem mp]
   (loop [{:keys [x+y-coeff x-y-coeff] :as cst-cmp} (cost-fn whole-problem mp) cmp mp [min-xy min-cost] nil]
@@ -566,7 +566,6 @@ Returns a new priority map with supplied mappings"
                                        (recur new-points-priority-map new-point-contributed-by-maps new-map-contributes-points new-map-hash-to-map)))))]
     [min-point min-cost]))
   
-
 (defn solve-hashing-vornoi-around-mp []
   (let [[n locs] (read-stdin)
         locs (vec (map vec locs))
@@ -575,41 +574,13 @@ Returns a new priority map with supplied mappings"
         [[xmp ymp :as min-point] min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
         pts (find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense whole-problem min-point min-mp)]
         (clojure.pprint/pprint (find-min-cost-among whole-problem pts min-mp))))
-  
-(defn tt []
-  (solve-hashing-vornoi-around-mp)
-  (solve-vornoi-hashing))
-
-(defn solve-hashing-hashing []
-  (let [[n locs] (read-stdin)
-        locs (vec (map vec locs))
-        [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
-        min-mp (optimize whole-problem mp)
-        [[xmp ymp :as min-point] min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
-        [closest-point min-cost-actual] (let [[dx+ dx- dy+ dy-] (map #(get-in min-mp (conj % :x+y)) (for [dir [:dx :dy] sgn [:+ :-]] [dir sgn]))
-                                              pts (map (fn fnc-coll [[fnc coll]]
-                                                         (first (apply min-key second (map (juxt identity (comp fnc locs)) (keys coll)))))
-                                                       [[#(- (first %) xmp) dx+]
-                                                        [#(- xmp (first %)) dx-]
-                                                        [#(- (second %) ymp) dy+]
-                                                        [#(- ymp (second %)) dy-]])]
-                                          (println pts)
-                                          (apply min-key second (map (fn [pt] [pt (reduce  #(+ %1 (dist (locs pt) %2)) 0 locs)]) pts)))]
-    {:id closest-point :cost min-cost-actual}))
-      
-(defn solve-vornoi-hashing []
-  (let [[n locs] (read-stdin)
-        locs (vec (map vec locs))
-        [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
-        vornoi-graph (vornoi-graph whole-problem)
-        min-mp (optimize whole-problem mp)
-        [min-point min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
-        min-existing-node (find-vornoi-cell whole-problem vornoi-graph 0 min-point)]
-    {:id min-existing-node :cost min-cost}))
 
 (defn -main []
   (solve-vornoi-hashing))
-
+  
+(defn tt []
+  (solve-hashing-vornoi-around-mp)
+  #_(brute-force-solve (second (read-stdin))))
 
 
 
