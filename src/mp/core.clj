@@ -214,61 +214,8 @@ Returns a new priority map with supplied mappings"
                                                 (inc xmax)]))]
             prty)))
 
-(defn points-on-either-side [{:keys [locs]} front p n]
-  (let [[x0 y0] (locs p)
-        before-p (take n (concat (map second (rsubseq front < y0)) (repeat nil)))
-        after-p (take n (concat (map second (subseq front > y0)) (repeat nil)))]
-    (concat (reverse before-p) [p] after-p)))
-
-(defn two-points-on-either-side [{:keys [locs]} front p]
-  (let [[x0 y0] (locs p)
-        [p-1 p-2] (map second (rsubseq front < y0))
-        [p+1 p+2] (map second (subseq front > y0))]
-    [p-2 p-1 p p+1 p+2]))
-
-(defn update-priorities [whole-problem pf affected-nodes]
-  (let [affected-triplets (partition 3 1 affected-nodes)]
-    (reduce (fn [cpf [p-1 p p+1]]
-              (if p (assoc cpf p (front-node-priority whole-problem p-1 p p+1)) cpf)) pf affected-triplets)))
-
-(defn add-node [{:keys [locs locs-to-id] :as whole-problem} w [cx cy :as np]]
-  (let [new-node-id (locs-to-id np)
-        w (if-let [p (get-in w [:front cy])]
-            (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side whole-problem (:front w) p)
-                  w (update-in w [:graph-edges] #(into % (filter first [[p new-node-id] [p-1 new-node-id] [p+1 new-node-id]])))
-                  w (assoc-in w [:front cy] new-node-id)
-                  w (update-in w [:pfront] #(dissoc % p))
-                  w (update-in w [:pfront] #(update-priorities whole-problem % [p-2 p-1 new-node-id p+1 p+2]))]
-              w)
-            (let [w (assoc-in w [:front cy] new-node-id)
-                  [p-2 p-1 p p+1 p+2 ] (two-points-on-either-side whole-problem (:front w) new-node-id)
-                  w (update-in w [:graph-edges] #(into % (filter first [[p-1 new-node-id] [p+1 new-node-id]])))
-                  w (update-in w [:pfront] #(update-priorities whole-problem % [p-2 p-1 new-node-id p+1 p+2]))]
-              w))
-        update-priorities-whole-problem (partial update-priorities whole-problem)
-        w (loop [{ge :graph-edges f :front pf :pfront :as w} w]
-            (let [[cid s-max] (peek pf)]
-              (if (< cx s-max) w
-                  (let [[p-2 p-1 p p+1 p+2] (two-points-on-either-side whole-problem f cid)
-                        [x y] (locs cid)
-                        new-f (dissoc f y)
-                        new-pf (-> (dissoc pf p) (update-priorities-whole-problem [p-2 p-1 p+1 p+2]))
-                        new-ge (if (and p-1 p+1) (conj ge [p-1 p+1]) ge)]
-                    (recur {:front new-f :pfront new-pf :graph-edges new-ge})))))]
-    w))
-
-(defn vornoi-graph [{:keys [locs locs-to-id] [[xmin xmax] [ymin ymax]] :bbox :as whole-problem}]
-  (let [[[_ fy :as floc] & rlocs] (sort locs)
-        fid (locs-to-id floc)
-        {vornoi-graph-edges :graph-edges} (reduce (partial add-node whole-problem)
-                                                  {:front (sorted-map fy fid) :pfront (priority-map fid xmax) :boundary-nodes #{fid} :graph-edges []} rlocs)
-        vornoi-graph  (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
-                                (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges)]
-    vornoi-graph))
-
 
 (defn find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense [{:keys [locs] :as whole-problem} [mpx mpy] mp]
-  {:post [#_(d/d {:inp (d/self-keyed-map whole-problem mpx mpy mp) :out %})]}
   (let [opts (for [x-or-y [:dx :dy] +or- [:+ :-]]
                [x-or-y +or-])
         locs (into [] (map (fn [[x y]] [(- x mpx) (- y mpy)]) locs))
@@ -282,7 +229,6 @@ Returns a new priority map with supplied mappings"
                              (loop [pmin nil pmax nil life nil
                                     [[cpid crd :as available] & rest-ord-pts :as all-ord-pts] (seq ordered-points)
                                     vpts-before-min nil vpts-after-max nil]
-                               #_(d/d (d/self-keyed-map pmin pmax life all-ord-pts vpts-before-min vpts-after-max))
                                (if-not available (into vpts-after-max vpts-before-min)
                                        (let [s (abs crd)
                                              cur-crd (locs cpid)]
@@ -301,11 +247,6 @@ Returns a new priority map with supplied mappings"
                                            (into vpts-after-max vpts-before-min)))))))]
     (mapcat enclosing-points opts)))
 
-
-
-
-
-
 (def node-movement-map {:x+y {:dec [{:from [:dy :-] :to [:dx :+]}
                                     {:from [:dx :-] :to [:dy :+]}]
                               :inc [{:from [:dx :+] :to [:dy :-]}
@@ -319,18 +260,6 @@ Returns a new priority map with supplied mappings"
   (some #(seq (:x+y (get-in mp (:from %)))) (get-in node-movement-map [dir inc-or-dec])))
 
 (defn corners-of-cost-func [{:keys [locs] :as whole-problem} {:keys [k x+y-coeff x-y-coeff min-x+y max-x+y min-x-y max-x-y] :as w}]
-  {:post [#_(let [cost-bf (fn [x+y x-y]
-                            (let [x (/ (+ x+y x-y) 2) y (/ (- x+y x-y) 2)]
-                              (reduce (fn [s [xi yi]] (+ s (max (abs (- x xi)) (abs (- y yi))))) 0 locs)))
-                  preds (doall (map (fn [[[x+y x-y] cst]]
-                                      (let [cst-bf (cost-bf x+y x-y)]
-                                        (if (= cst-bf cst) true
-                                            (println (d/self-keyed-map x+y x-y cst cst-bf))))) %))]
-              (if-not (every? identity preds) (do (clojure.inspector/inspect-tree (d/self-keyed-map locs w))
-                                                  (clojure.inspector/inspect-tree (doall
-                                                                                   (for [x-or-y [:dx :dy] +-or-- [:+ :-] dir [:x+y :x-y]]
-                                                                                     [[x-or-y +-or-- dir] ((juxt class seq peek) (get-in (:mp w) [x-or-y +-or-- dir]))])))
-                                                  nil) true))]}
   (let [cost (fn [x+y x-y] (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))] 
     (for [x+y [min-x+y max-x+y]
           x-y [min-x-y max-x-y]]
@@ -458,17 +387,29 @@ Returns a new priority map with supplied mappings"
        (> x-y min-x-y) (recur (move whole-problem [:x-y :inc] cmp))
        :else cmp))))
 
-(defn find-min-cost-among [{:keys [locs x+y-coll x-y-coll] :as whole-problem} pts mp]
-  (let [ordered-pts (into (priority-map) (map (juxt identity (juxt x+y-coll x-y-coll)) pts))]
-    (peek (second (reduce (fn [[cur-mp cur-pt-cost-pairs] [pid [x+y x-y]]]
-                            (let [new-mp (move-to whole-problem cur-mp [x+y x-y])
-                                  {:keys [k x+y-coeff x-y-coeff]} (cost-fn whole-problem new-mp)]
-                              [new-mp (assoc cur-pt-cost-pairs pid (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))]))
-                          [mp (priority-map)] ordered-pts))))) 
+(defn dist [[x1 y1] [x2 y2]] (max (abs (- x1 x2)) (abs (- y1 y2))))
 
+(defn brute-force-cost [{:keys [locs]} id]
+  (let [mp (locs id)]
+    (reduce (fn [s [x y]]
+              (+ s (dist mp [x y]))) 0 locs)))
+
+(defn find-min-cost-among-eff [{:keys [locs x+y-coll x-y-coll] :as whole-problem} pts mp]
+    (let [ordered-pts (into (priority-map) (map (juxt identity (juxt x+y-coll x-y-coll)) pts))]
+      (peek (second (reduce (fn [[cur-mp cur-pt-cost-pairs] [pid [x+y x-y]]]
+                              (let [new-mp (move-to whole-problem cur-mp [x+y x-y])
+                                    {:keys [k x+y-coeff x-y-coeff]} (cost-fn whole-problem new-mp)]
+                                [new-mp (assoc cur-pt-cost-pairs pid (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))]))
+                            [mp (priority-map)] ordered-pts)))))
+
+(defn find-min-cost-among-bf [{:keys [locs] :as whole-problem} pts _]
+  (apply min-key second (map (juxt identity (partial brute-force-cost whole-problem)) pts)))
+
+(defn find-min-cost-among [whole-problem pts mp]
+  (
+   (find-min-cost-among-bf whole-problem pts mp)
 (defn optimize [whole-problem mp]
   (loop [{:keys [x+y-coeff x-y-coeff] :as cst-cmp} (cost-fn whole-problem mp) cmp mp [min-xy min-cost] nil]
-    ;(println (d/self-keyed-map min-xy min-cost))
     (let [[opt1 opt2 :as opts] (filter second [[:x+y (cond
                                                       (> x+y-coeff 0) :dec
                                                       (< x+y-coeff 0) :inc)]
@@ -484,103 +425,20 @@ Returns a new priority map with supplied mappings"
           (if (not (or (not min-cost) (< new-min-cost min-cost))) cmp
               (recur new-cost-fn new-mp [new-min-xy new-min-cost]))) cmp))))
 
-(defn dist [[x1 y1] [x2 y2]] (max (abs (- x1 x2)) (abs (- y1 y2))))
 
-(defn find-vornoi-cell [{:keys [locs]} vornoi-graph starting-cell-id [x y]]
-  (loop [c-cell-id starting-cell-id]
-    (let [mdist #(dist [x y] (locs %))
-          min-neighbouring-cell-id (apply min-key mdist (vornoi-graph c-cell-id))]
-      (if (< (mdist min-neighbouring-cell-id) (mdist c-cell-id))
-        (recur min-neighbouring-cell-id) c-cell-id))))
-
-
-(defn initialize-point-search-front [whole-problem min-mp]
-  (let [min-map-cost-func (cost-fn whole-problem min-mp)
-        starting-point-front (into (priority-map) (corners-of-cost-func whole-problem min-map-cost-func))
-        maps-with-cost-increasing-envelope (loop [map-collection #{min-mp}  [fmap-front & rmaps-front] [min-mp]]
-                                             (if-not fmap-front map-collection
-                                                     (let [{:keys [x+y-coeff x-y-coeff]} (cost-fn whole-problem fmap-front)
-                                                           new-maps (filter (comp not map-collection)
-                                                                            (keep #(move whole-problem % fmap-front)
-                                                                                  [[:x+y (cond
-                                                                                          (< x+y-coeff 0) :inc
-                                                                                          (> x+y-coeff 0) :dec)]
-                                                                                   [:x-y (cond
-                                                                                          (< x-y-coeff 0) :inc
-                                                                                          (> x-y-coeff 0) :dec)]]))]
-                                                       (recur (into map-collection new-maps) (into rmaps-front new-maps)))))
-        [points-priority-map point-contributed-by-maps map-contributes-points map-hash-to-map]
-        (reduce (fn [[ppl pcbm mcp mhtm] cmp]
-                  (let [{:keys [max-x+y min-x+y max-x-y min-x-y map-hash] :as cfn} (cost-fn whole-problem cmp)
-                        point-priority-pairs (corners-of-cost-func whole-problem cfn)]
-                    (conj (reduce (fn [[cppl cpcbm cmcp] [hash-coord prty :as pp]]
-                                    [(conj cppl pp)
-                                     (update-in cpcbm [hash-coord] #(conj (or % #{}) map-hash))
-                                     (update-in cmcp [map-hash] #(conj (or % #{}) hash-coord))])
-                                  [ppl pcbm mcp]
-                                  point-priority-pairs) (assoc mhtm map-hash cmp))))
-                [(priority-map) {} {} {}] maps-with-cost-increasing-envelope)]
-    [points-priority-map point-contributed-by-maps map-contributes-points map-hash-to-map]))
-
-(defn advance-map [whole-problem [mcp pcbm ppm mhtm] leaving-map-hash]
-  (let [leaving-map (mhtm leaving-map-hash)
-        {:keys [x+y-coeff x-y-coeff] :as lmcfn} (cost-fn whole-problem leaving-map)  
-        opts (let [switcher (comp {1 [:inc] -1 [:dec] 0 [:inc :dec]} #(compare % 0))]
-               (concat (map #(vector :x+y %) (switcher x+y-coeff))
-                       (map #(vector :x-y %) (switcher x-y-coeff))))
-        new-pcbm (reduce (fn [npcbm pt]
-                           (let [npcbm-pt (npcbm pt)
-                                 new-npcbm-pt (disj npcbm-pt leaving-map-hash)]
-                             (if-not (seq new-npcbm-pt) (dissoc npcbm pt) (assoc npcbm pt new-npcbm-pt))))
-                         pcbm (mcp leaving-map-hash))
-        new-mcp (dissoc mcp leaving-map-hash)
-        new-map-hash-map-pairs (->> (keep #(move whole-problem % leaving-map) opts)
-                                    (map (juxt (comp :map-hash (partial cost-fn whole-problem)) identity))
-                                    (filter (comp not mhtm first)))
-        [nnn-pcbm nnn-mcp nnn-pp nnn-mhtm] (reduce (fn [[n-pcbm n-mcp n-pp n-mhtm] [mp-hash mp]]
-                                                     (let [map-cost-fn (cost-fn whole-problem mp)
-                                                           point-priority-pairs (corners-of-cost-func whole-problem map-cost-fn)
-                                                           nn-pcbm (reduce (fn [cn-pcbm [pt-hash _]] (update-in cn-pcbm [pt-hash] #(conj (or % #{}) mp-hash)))
-                                                                           n-pcbm point-priority-pairs)
-                                                           nn-mcp (assoc n-mcp mp-hash (set (map first point-priority-pairs)))
-                                                           nn-pp (into n-pp point-priority-pairs)
-                                                           nn-mhtm (assoc n-mhtm mp-hash mp)]
-                                                       [nn-pcbm nn-mcp nn-pp nn-mhtm]))
-                                                   [new-pcbm new-mcp ppm (dissoc mhtm leaving-map-hash)]
-                                                   new-map-hash-map-pairs)]
-    [nnn-mcp nnn-pcbm nnn-pp nnn-mhtm]))
-      
-(defn find-point-closest-to-minimum-point [{:keys [hashes-to-id] :as whole-problem} min-mp]
-  (let [[points-priority-map point-contributed-by-maps map-contributes-points map-hash-to-map] (initialize-point-search-front whole-problem min-mp)
-        [min-point min-cost] (loop [cur-points-priority-map points-priority-map
-                                    cur-point-contributed-by-maps point-contributed-by-maps
-                                    cur-map-contributes-points map-contributes-points
-                                    cur-map-hash-to-map map-hash-to-map]
-                               (let [[cur-optimum-point-hash cur-point-cost :as w] (peek cur-points-priority-map)]
-                                 (if (hashes-to-id cur-optimum-point-hash) w
-                                     (let [maps-contributing-current-point (set (cur-point-contributed-by-maps cur-optimum-point-hash))
-                                           [new-map-contributes-points new-point-contributed-by-maps new-points-priority-map new-map-hash-to-map]
-                                           (reduce (partial advance-map whole-problem)
-                                                   [cur-map-contributes-points cur-point-contributed-by-maps (pop cur-points-priority-map) cur-map-hash-to-map]
-                                                   maps-contributing-current-point)]
-                                       (recur new-points-priority-map new-point-contributed-by-maps new-map-contributes-points new-map-hash-to-map)))))]
-    [min-point min-cost]))
-  
 (defn solve-hashing-vornoi-around-mp []
   (let [[n locs] (read-stdin)
         locs (vec (map vec locs))
         [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
         min-mp (optimize whole-problem mp)
         [[xmp ymp :as min-point] min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
-        pts (find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense whole-problem min-point min-mp)]
+        pts ((d/timed find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense) whole-problem min-point min-mp)]
         (clojure.pprint/pprint (find-min-cost-among whole-problem pts min-mp))))
 
-(defn -main []
-  (solve-vornoi-hashing))
+(defn -main [])
   
 (defn tt []
-  (solve-hashing-vornoi-around-mp)
-  #_(brute-force-solve (second (read-stdin))))
+  (solve-hashing-vornoi-around-mp))
 
 
 
