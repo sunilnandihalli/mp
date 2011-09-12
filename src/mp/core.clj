@@ -267,21 +267,45 @@ Returns a new priority map with supplied mappings"
     vornoi-graph))
 
 
+(defn find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense [{:keys [locs] :as whole-problem} [mpx mpy] mp]
+  {:post [#_(d/d {:inp (d/self-keyed-map whole-problem mpx mpy mp) :out %})]}
+  (let [opts (for [x-or-y [:dx :dy] +or- [:+ :-]]
+               [x-or-y +or-])
+        locs (into [] (map (fn [[x y]] [(- x mpx) (- y mpy)]) locs))
+        enclosing-points (fn [[x-or-y +or- :as w]]
+                           (let [coord-getter (comp ({:dx first :dy second} x-or-y) locs)
+                                 other-direction-coord-getter ({:dx second :dy first} x-or-y)
+                                 other-direction-coord-getter-from-id (comp other-direction-coord-getter locs)
+                                 comparator ({:+ < :- >} +or-)
+                                 points (keys (get-in mp (conj w :x+y)))
+                                 ordered-points (into (priority-map-by comparator) (map (juxt identity coord-getter) points))]
+                             (loop [pmin nil pmax nil life nil
+                                    [[cpid crd :as available] & rest-ord-pts :as all-ord-pts] (seq ordered-points)
+                                    vpts-before-min nil vpts-after-max nil]
+                               #_(d/d (d/self-keyed-map pmin pmax life all-ord-pts vpts-before-min vpts-after-max))
+                               (if-not available (into vpts-after-max vpts-before-min)
+                                       (let [s (abs crd)
+                                             cur-crd (locs cpid)]
+                                         (if (or (not life) (> life s))
+                                           (let [other-crd (other-direction-coord-getter-from-id cpid)
+                                                 {:keys [pmin pmax vpts-after-max vpts-before-min]
+                                                  :or {pmin pmin pmax pmax vpts-before-min vpts-before-min vpts-after-max vpts-after-max}}
+                                                 (cond
+                                                  (< other-crd 0) (if (or (not pmin) (< (other-direction-coord-getter pmin) other-crd))
+                                                                    {:pmin cur-crd :vpts-before-min (conj vpts-before-min cpid)})
+                                                  (> other-crd 0) (if (or (not pmax) (> (other-direction-coord-getter pmax) other-crd))
+                                                                    {:pmax cur-crd :vpts-after-max (conj vpts-after-max cpid)})
+                                                  (= other-crd 0) {:pmax cur-crd :pmin cur-crd :vpts-before-min (conj vpts-before-min cpid)})
+                                                 life (if (and pmin pmax) (abs (- (other-direction-coord-getter pmin) (other-direction-coord-getter pmax))))]
+                                             (recur pmin pmax life rest-ord-pts vpts-before-min vpts-after-max))
+                                           (into vpts-after-max vpts-before-min)))))))]
+    (mapcat enclosing-points opts)))
 
-(defn sqswp-front-node-priority [])
-(defn sqswp-update-priorities [])
-(defn sqswp-add-node [])
 
-(defn sqswp-vornoi-graph [{:keys [locs]} [mpx mpy :as mp]]
-  (let [dist-sorted-coords (map-indexed (fn [i [x y]]
-                                          [i (dist [x y] mp)
-                                           (keep identity [(cond
-                                                            (< x mpx) [:dx :-]
-                                                            (> x mpx) [:dx :+])
-                                                           (cond
-                                                            (< y mpy) [:dy :-]
-                                                            (> y mpy) [:dy :+])])
-                                           
+
+
+
+
 (def node-movement-map {:x+y {:dec [{:from [:dy :-] :to [:dx :+]}
                                     {:from [:dx :-] :to [:dy :+]}]
                               :inc [{:from [:dx :+] :to [:dy :-]}
@@ -424,6 +448,24 @@ Returns a new priority map with supplied mappings"
                     (recur (execute-option ccmp [id copt]) h))
             ccmp))))))
 
+(defn move-to [whole-problem starting-map [x+y x-y]]
+  (loop [cmp starting-map]
+    (let [{:keys [min-x+y max-x+y min-x-y max-x-y] :as cst} (d/d (cost-fn whole-problem cmp))]
+      (cond
+       (< x+y min-x+y) (recur (move whole-problem [:x+y :inc] cmp))
+       (> x+y max-x+y) (recur (move whole-problem [:x+y :dec] cmp))
+       (< x-y min-x-y) (recur (move whole-problem [:x-y :inc] cmp))
+       (> x-y min-x-y) (recur (move whole-problem [:x-y :dec] cmp))))))
+
+(defn find-min-cost-among [{:keys [locs x+y-coll x-y-coll] :as whole-problem} pts mp]
+  (let [ordered-pts (into (priority-map) (map (juxt identity (juxt x+y-coll x-y-coll)) pts))]
+    (println ordered-pts)
+    (second (reduce (fn [[cur-mp cur-pt-cost-pairs] [pid [x+y x-y]]]
+                      (let [new-mp (move-to whole-problem cur-mp [x+y x-y])
+                            {:keys [k x+y-coeff x-y-coeff]} (cost-fn new-mp)]
+                        [new-mp (assoc cur-pt-cost-pairs pid (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))]))
+                    [mp (priority-map)] ordered-pts)))) 
+
 (defn optimize [whole-problem mp]
   (loop [{:keys [x+y-coeff x-y-coeff] :as cst-cmp} (cost-fn whole-problem mp) cmp mp [min-xy min-cost] nil]
     ;(println (d/self-keyed-map min-xy min-cost))
@@ -523,13 +565,21 @@ Returns a new priority map with supplied mappings"
                                                    maps-contributing-current-point)]
                                        (recur new-points-priority-map new-point-contributed-by-maps new-map-contributes-points new-map-hash-to-map)))))]
     [min-point min-cost]))
-
-(defn calc-polygon [{:keys [locs] :as whole-problem} [mpx mpy] s id]
-  "returns a list/vector of points in the polygon")
-
-(defn intersect-polygon [{pts1 :pts edges1 :edges :as poly1} {pts2 :pts edges2 :edges :as poly2}]
-  "returns true if the two polygons intersect")
   
+
+(defn solve-hashing-vornoi-around-mp []
+  (let [[n locs] (read-stdin)
+        locs (vec (map vec locs))
+        [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
+        min-mp (optimize whole-problem mp)
+        [[xmp ymp :as min-point] min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
+        pts (find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense whole-problem min-point min-mp)]
+        (clojure.pprint/pprint (find-min-cost-among whole-problem pts min-mp))))
+  
+(defn tt []
+  (solve-hashing-vornoi-around-mp)
+  (solve-vornoi-hashing))
+
 (defn solve-hashing-hashing []
   (let [[n locs] (read-stdin)
         locs (vec (map vec locs))
@@ -546,19 +596,15 @@ Returns a new priority map with supplied mappings"
                                           (println pts)
                                           (apply min-key second (map (fn [pt] [pt (reduce  #(+ %1 (dist (locs pt) %2)) 0 locs)]) pts)))]
     {:id closest-point :cost min-cost-actual}))
-        
-                        
-    
-  
-
+      
 (defn solve-vornoi-hashing []
-  (let [[n locs] (time (read-stdin))
+  (let [[n locs] (read-stdin)
         locs (vec (map vec locs))
-        [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] ((d/timed initial-map-guess) locs n)
-        vornoi-graph ((d/timed vornoi-graph) whole-problem)
-        min-mp ((d/timed optimize) whole-problem mp)
+        [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
+        vornoi-graph (vornoi-graph whole-problem)
+        min-mp (optimize whole-problem mp)
         [min-point min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
-        min-existing-node ((d/timed find-vornoi-cell) whole-problem vornoi-graph 0 min-point)]
+        min-existing-node (find-vornoi-cell whole-problem vornoi-graph 0 min-point)]
     {:id min-existing-node :cost min-cost}))
 
 (defn -main []
