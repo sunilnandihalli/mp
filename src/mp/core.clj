@@ -505,6 +505,12 @@ Returns a new priority map with supplied mappings"
                                        (recur new-points-priority-map new-point-contributed-by-maps new-map-contributes-points new-map-hash-to-map)))))]
     [min-point min-cost]))
 
+(defn calc-polygon [{:keys [locs] :as whole-problem} [mpx mpy] s id]
+  "returns a list/vector of points in the polygon")
+
+(defn intersect-polygon [{pts1 :pts edges1 :edges :as poly1} {pts2 :pts edges2 :edges :as poly2}]
+  "returns true if the two polygons intersect")
+  
 (defn solve-hashing-hashing []
   (let [[n locs] (read-stdin)
         locs (vec (map vec locs))
@@ -537,7 +543,7 @@ Returns a new priority map with supplied mappings"
     {:id min-existing-node :cost min-cost}))
 
 (defn -main []
-  (solve))
+  (solve-vornoi-hashing))
 
 
 
