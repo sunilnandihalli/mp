@@ -156,6 +156,9 @@ Returns a new priority map with supplied mappings"
   [comparator & keyvals]
   (reduce conj (pm-empty-by comparator) (partition 2 keyvals)))
 
+(defn priority-map-key-by [key-fn comparator & keyvals]
+  (priority-map-by #(comparator (key-fn %1) (key-fn %2)) keyvals))
+
 
 (defmacro thrush-with-pattern [[pattern] first & exprs]
   (if (seq exprs) `(let [~pattern ~first] (thrush-with-pattern [~pattern] ~@exprs)) first))
@@ -210,6 +213,7 @@ Returns a new priority map with supplied mappings"
                                                 (when (and p-1 (> x-1 x)) (+ x (* 2 (- ymax y-1))))
                                                 (inc xmax)]))]
             prty)))
+
 (defn points-on-either-side [{:keys [locs]} front p n]
   (let [[x0 y0] (locs p)
         before-p (take n (concat (map second (rsubseq front < y0)) (repeat nil)))
@@ -261,8 +265,23 @@ Returns a new priority map with supplied mappings"
         vornoi-graph  (reduce (fn vornoi-graph-reduction-func [g [x y :as w]]
                                 (-> (update-in g [x] #(conj % y)) (update-in [y] #(conj % x)))) {} vornoi-graph-edges)]
     vornoi-graph))
-      
 
+
+
+(defn sqswp-front-node-priority [])
+(defn sqswp-update-priorities [])
+(defn sqswp-add-node [])
+
+(defn sqswp-vornoi-graph [{:keys [locs]} [mpx mpy :as mp]]
+  (let [dist-sorted-coords (map-indexed (fn [i [x y]]
+                                          [i (dist [x y] mp)
+                                           (keep identity [(cond
+                                                            (< x mpx) [:dx :-]
+                                                            (> x mpx) [:dx :+])
+                                                           (cond
+                                                            (< y mpy) [:dy :-]
+                                                            (> y mpy) [:dy :+])])
+                                           
 (def node-movement-map {:x+y {:dec [{:from [:dy :-] :to [:dx :+]}
                                     {:from [:dx :-] :to [:dy :+]}]
                               :inc [{:from [:dx :+] :to [:dy :-]}
