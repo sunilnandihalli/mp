@@ -2,7 +2,8 @@
   (:refer-clojure)
   (:gen-class)
   (:require [mp.debug :as d]
-            [clojure.set :as s])
+            [clojure.set :as s]
+            [clojure.contrib.profile :as p])
   (:import clojure.lang.MapEntry java.util.Map clojure.lang.PersistentTreeMap))
 
 (declare pm-empty)
@@ -204,38 +205,42 @@ Returns a new priority map with supplied mappings"
                             (+ cst (max (abs (- x xi)) (abs (- y yi))))) 0 locs))]
     (apply min-key second (map (juxt identity mcost) locs))))
 
-(defn front-node-priority [{:keys [locs] [[xmin xmax] [ymin ymax]] :bbox :as whole-problem} p-1 p p+1]
-  (if-not p nil
-          (let [[[x-1 y-1] [x y] [x+1 y+1]] (map #(when % (locs %)) [p-1 p p+1])
-                prty (apply min (keep identity [(when (and p-1 p+1 (> x-1 x) (> x+1 x)) (+ x (- y+1 y-1)))
-                                                (when (and p-1 p+1 (= x-1 x x+1)) (inc xmax))
-                                                (when (and p+1 (> x+1 x)) (+ x (* 2 (- y+1 ymin))))
-                                                (when (and p-1 (> x-1 x)) (+ x (* 2 (- ymax y-1))))
-                                                (inc xmax)]))]
-            prty)))
-
-
 (defn find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense [{:keys [locs] :as whole-problem} [mpx mpy] mp]
   (let [opts (for [x-or-y [:dx :dy] +or- [:+ :-]]
                [x-or-y +or-])
-        locs (into [] (map (fn [[x y]] [(- x mpx) (- y mpy)]) locs))
+        locs (vec (map (fn [[x y]] [(- x mpx) (- y mpy)]) locs))
+        update! (fn update! [tr-mp key f]
+                  (let [x (tr-mp key)]
+                    (assoc! tr-mp key (f x))))
+        cmprtr #(< (second %1) (second %2))
+        {:keys [dx+ dx- dy+ dy-]} (reduce (fn [{:keys [dx+ dx- dy+ dy- id] :as w} [x y]]
+                                            (thrush-with-pattern [ret] w
+                                              (update! ret :id inc)
+                                              (if (>= x 0) (update! ret :dx+ #(conj! % [id x])) ret)
+                                              (if (<= x 0) (update! ret :dx- #(conj! % [id (- x)])) ret)
+                                              (if (>= y 0) (update! ret :dy+ #(conj! % [id y])) ret)
+                                              (if (<= y 0) (update! ret :dy- #(conj! % [id (- y)])) ret)))
+                                          (transient {:dy+ (transient (vector))
+                                                      :dy- (transient (vector))
+                                                      :dx+ (transient (vector))
+                                                      :dx- (transient (vector)) :id 0}) locs)
+        srt (comp (partial sort-by second) persistent!)
+        partitions {:dx {:+ (srt dx+) :- (srt dx-)} :dy {:+ (srt dy+) :- (srt dy-)}}
         enclosing-points (fn [[x-or-y +or- :as w]]
                            (let [coord-getter (comp ({:dx first :dy second} x-or-y) locs)
                                  other-direction-coord-getter ({:dx second :dy first} x-or-y)
                                  other-direction-coord-getter-from-id (comp other-direction-coord-getter locs)
-                                 comparator ({:+ < :- >} +or-)
-                                 points (keys (get-in mp (conj w :x+y)))
-                                 ordered-points (into (priority-map-by comparator) (map (juxt identity coord-getter) points))]
+                                 ordered-points (get-in partitions [x-or-y +or-])]
                              (loop [pmin nil pmax nil life nil
                                     [[cpid crd :as available] & rest-ord-pts :as all-ord-pts] (seq ordered-points)
                                     vpts-before-min nil vpts-after-max nil]
                                (if-not available (into vpts-after-max vpts-before-min)
-                                       (let [s (abs crd)
-                                             cur-crd (locs cpid)]
+                                       (let [s crd cur-crd (locs cpid)]
                                          (if (or (not life) (> life s))
-                                           (let [other-crd (other-direction-coord-getter-from-id cpid)
+                                           (let [other-crd (other-direction-coord-getter cur-crd)
                                                  {:keys [pmin pmax vpts-after-max vpts-before-min]
-                                                  :or {pmin pmin pmax pmax vpts-before-min vpts-before-min vpts-after-max vpts-after-max}}
+                                                  :or {pmin pmin pmax pmax vpts-before-min vpts-before-min
+                                                       vpts-after-max vpts-after-max}}
                                                  (cond
                                                   (< other-crd 0) (if (or (not pmin) (< (other-direction-coord-getter pmin) other-crd))
                                                                     {:pmin cur-crd :vpts-before-min (conj vpts-before-min cpid)})
@@ -245,7 +250,7 @@ Returns a new priority map with supplied mappings"
                                                  life (if (and pmin pmax) (abs (- (other-direction-coord-getter pmin) (other-direction-coord-getter pmax))))]
                                              (recur pmin pmax life rest-ord-pts vpts-before-min vpts-after-max))
                                            (into vpts-after-max vpts-before-min)))))))]
-    (mapcat enclosing-points opts)))
+    (reduce into #{} (map enclosing-points opts))))
 
 (def node-movement-map {:x+y {:dec [{:from [:dy :-] :to [:dx :+]}
                                     {:from [:dx :-] :to [:dy :+]}]
@@ -301,11 +306,7 @@ Returns a new priority map with supplied mappings"
        :min-x+y  min-x+y :max-x+y max-x+y :min-x-y  min-x-y :max-x-y max-x-y :mp mp})))
        
 (defn initial-map-guess [locs n]
-  (let [locs-to-id (into {} (map vector locs (range)))
-        hashes-to-id (into {} (map (fn [[x y] i]
-                                     [[(+ x y) (- x y)] i]) locs (range)))
-        bbox (bounding-box locs)
-        [xsum ysum] (reduce (fn [[xsum ysum] [x y]] [(+ xsum x) (+ ysum y)]) locs)
+  (let [[xsum ysum] (reduce (fn [[xsum ysum] [x y]] [(+ xsum x) (+ ysum y)]) locs)
         [xav yav] [(/ xsum n) (/ ysum n)]
         [k-x+y k-x-y] [(+ xav yav) (- xav yav)]
         [dx+ dx- dy+ dy- x+y-coll x-y-coll] (reduce (fn [[dx+ dx- dy+ dy- x+y-coll x-y-coll cid] [x y]]
@@ -341,7 +342,7 @@ Returns a new priority map with supplied mappings"
                  :- {:x+y dx--x+y :x-y dx--x-y :sum sum-dx-}}
             :dy {:+ {:x+y dy+-x+y :x-y dy+-x-y :sum sum-dy+}
                  :- {:x+y dy--x+y :x-y dy--x-y :sum sum-dy-}}}
-        whole-problem {:bbox bbox :locs locs :locs-to-id locs-to-id :hashes-to-id hashes-to-id :x+y-coll x+y-coll :x-y-coll x-y-coll}]
+        whole-problem {:locs locs :x+y-coll x+y-coll :x-y-coll x-y-coll}]
     [mp whole-problem]))
 
 (defn move [{:keys [locs x+y-coll x-y-coll]} [dir inc-or-dec] mp]
@@ -377,37 +378,86 @@ Returns a new priority map with supplied mappings"
                     (recur (execute-option ccmp [id copt]) h))
             ccmp))))))
 
-(defn move-to [whole-problem starting-map [x+y x-y]]
-  (loop [cmp starting-map]
-    (let [{:keys [min-x+y max-x+y min-x-y max-x-y] :as cst} (cost-fn whole-problem cmp)]
-      (cond
-       (< x+y min-x+y) (recur (move whole-problem [:x+y :dec] cmp))
-       (> x+y max-x+y) (recur (move whole-problem [:x+y :inc] cmp))
-       (< x-y min-x-y) (recur (move whole-problem [:x-y :dec] cmp))
-       (> x-y min-x-y) (recur (move whole-problem [:x-y :inc] cmp))
-       :else cmp))))
-
+(defn move-to [{:keys [locs x+y-coll x-y-coll] :as whole-problem} mp [x+y x-y]]
+  {:post [#_(let [{:keys [min-x+y max-x+y min-x-y max-x-y] :as cfn} (cost-fn whole-problem %)]
+              (if-not (and (< min-x+y x+y) (<= x+y max-x+y) (< min-x-y x-y) (<= x-y max-x-y))
+                (do (d/d {:ret % :inp (d/self-keyed-map mp x+y x-y)
+                          :ret-cfn (d/self-keyed-map min-x+y max-x+y min-x-y max-x-y)}) nil) true))]}
+  (let [pt-hash {:x+y x+y :x-y x-y}
+        node-mvmt-mp {:x+y [[[:dx :-] [:dy :+]]
+                            [[:dy :-] [:dx :+]]]
+                      :x-y [[[:dx :-] [:dy :-]]
+                            [[:dy :+] [:dx :+]]]}
+        execute-option (fn execute-option [cmp {:keys [from to ids] :as opt}]
+                         (if-not opt cmp
+                                 (let [m-from (get-in cmp from)
+                                       m-to (get-in cmp to)
+                                       [[dx-or-dy-from] [dx-or-dy-to]] [from to]
+                                       [from-coord-getter to-coord-getter] (map {:dx first :dy second} [dx-or-dy-from dx-or-dy-to])
+                                       {x+y-set-from :x+y x-y-set-from :x-y sum-from :sum} m-from
+                                       {x+y-set-to :x+y x-y-set-to :x-y sum-to :sum} m-to
+                                       [x+y-set-from x+y-set-to
+                                        x-y-set-from x-y-set-to
+                                        sum-from sum-to] (reduce (fn [[x+y-set-from x+y-set-to
+                                                                       x-y-set-from x-y-set-to
+                                                                       sum-from sum-to] id]
+                                                                   (let [loc (locs id)]
+                                                                     [(dissoc x+y-set-from id) (assoc x+y-set-to id (x+y-coll id))
+                                                                      (dissoc x-y-set-from id) (assoc x-y-set-to id (x-y-coll id))
+                                                                      (- sum-from (from-coord-getter loc)) (+ sum-to (to-coord-getter loc))]))
+                                                                 [x+y-set-from x+y-set-to
+                                                                  x-y-set-from x-y-set-to
+                                                                  sum-from sum-to] ids)]
+                                   (-> cmp
+                                       (assoc-in from (assoc m-from :x+y x+y-set-from :x-y x-y-set-from :sum sum-from))
+                                       (assoc-in to (assoc m-to :x+y x+y-set-to :x-y x-y-set-to :sum sum-to))))))
+        ensure-in-range (fn ensure-in-range [cmp dir]
+                          (let [v (pt-hash dir)
+                                opts (node-mvmt-mp dir)
+                                helper (fn helper [ccmp [<min >=max]]
+                                         (let [<min-set (get-in ccmp (conj <min dir))
+                                               >=max-set (get-in ccmp (conj >=max dir))
+                                               opt (or (if-let [x (seq (take-while (fn [[_ prty]] (>= prty v)) (seq <min-set)))]
+                                                         {:from <min :to >=max :ids (map first x)})
+                                                       (if-let [x (seq (take-while (fn [[_ prty]] (< prty v)) (seq >=max-set)))]
+                                                         {:from >=max :to <min :ids (map first x)}))]
+                                           (execute-option ccmp opt)))]
+                            (reduce helper cmp opts)))]
+    (reduce ensure-in-range mp [:x+y :x-y])))
+                   
 (defn dist [[x1 y1] [x2 y2]] (max (abs (- x1 x2)) (abs (- y1 y2))))
 
+
 (defn brute-force-cost [{:keys [locs]} id]
-  (let [mp (locs id)]
-    (reduce (fn [s [x y]]
-              (+ s (dist mp [x y]))) 0 locs)))
+  (let [[mpx mpy] (locs id)]
+    (loop [s 0 [[x y :as loc] & rlocs] locs]
+      (if-not loc s
+              (let [dx (- x mpx)
+                    dy (- y mpy)
+                    dx (if (< dx 0) (- dx) dx)
+                    dy (if (< dy 0) (- dy) dy)]
+                (if (> dx dy) (recur (+ s dx) rlocs) (recur (+ s dy) rlocs)))))))
+                    
+                    
+
 
 (defn find-min-cost-among-eff [{:keys [locs x+y-coll x-y-coll] :as whole-problem} pts mp]
     (let [ordered-pts (into (priority-map) (map (juxt identity (juxt x+y-coll x-y-coll)) pts))]
       (peek (second (reduce (fn [[cur-mp cur-pt-cost-pairs] [pid [x+y x-y]]]
-                              (let [new-mp (move-to whole-problem cur-mp [x+y x-y])
-                                    {:keys [k x+y-coeff x-y-coeff]} (cost-fn whole-problem new-mp)]
+                              (let [new-mp (p/prof :move-to (move-to whole-problem cur-mp [x+y x-y]))
+                                    {:keys [k x+y-coeff x-y-coeff]} (p/prof :cost-fn-find-min-among-eff (cost-fn whole-problem new-mp))]
                                 [new-mp (assoc cur-pt-cost-pairs pid (+ k (* x+y-coeff x+y) (* x-y-coeff x-y)))]))
                             [mp (priority-map)] ordered-pts)))))
 
 (defn find-min-cost-among-bf [{:keys [locs] :as whole-problem} pts _]
-  (apply min-key second (map (juxt identity (partial brute-force-cost whole-problem)) pts)))
+  (apply min-key second
+         (map (juxt identity
+                    (partial brute-force-cost
+                             whole-problem)) pts)))
 
 (defn find-min-cost-among [whole-problem pts mp]
-  (
-   (find-min-cost-among-bf whole-problem pts mp)
+  (find-min-cost-among-bf whole-problem pts mp))
+
 (defn optimize [whole-problem mp]
   (loop [{:keys [x+y-coeff x-y-coeff] :as cst-cmp} (cost-fn whole-problem mp) cmp mp [min-xy min-cost] nil]
     (let [[opt1 opt2 :as opts] (filter second [[:x+y (cond
@@ -425,20 +475,22 @@ Returns a new priority map with supplied mappings"
           (if (not (or (not min-cost) (< new-min-cost min-cost))) cmp
               (recur new-cost-fn new-mp [new-min-xy new-min-cost]))) cmp))))
 
-
 (defn solve-hashing-vornoi-around-mp []
   (let [[n locs] (read-stdin)
         locs (vec (map vec locs))
         [mp {:keys [ locs-to-id hashes-to-id x+y-coll x-y-coll] :as whole-problem}] (initial-map-guess locs n)
         min-mp (optimize whole-problem mp)
         [[xmp ymp :as min-point] min-cost] (apply min-key second (corners-of-cost-func whole-problem (cost-fn whole-problem min-mp)))
-        pts ((d/timed find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense) whole-problem min-point min-mp)]
-        (clojure.pprint/pprint (find-min-cost-among whole-problem pts min-mp))))
+        actual-point [(/ (+ xmp ymp) 2) (/ (- xmp ymp) 2)]
+        pts (find-nodes-that-enclose-the-unavailable-meeting-point-in-the-vornoi-sense whole-problem actual-point min-mp)]
+    (println (second (find-min-cost-among whole-problem pts min-mp)))))
 
 (defn -main [])
   
 (defn tt []
-  (solve-hashing-vornoi-around-mp))
+  (let [locs (second (read-stdin))]
+    (time (solve-hashing-vornoi-around-mp))
+    #_(brute-force-solve locs)))
 
 
 
