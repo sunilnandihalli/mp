@@ -1,13 +1,3 @@
-# mp
-
-FIXME: write description
-
-## Usage
-
-FIXME: write
-
-## License
-
-Copyright (C) 2011 FIXME
-
-Distributed under the Eclipse Public License, the same as Clojure.
+The Meeting point Problem solution. This solution could run in about 5-10 secs but could not meet Interview streets
+time limit of 3 seconds. 
+ The basic approach involves creating an incremental vornoi-diagram and computing the shortest path.
